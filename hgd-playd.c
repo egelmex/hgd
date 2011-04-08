@@ -35,6 +35,9 @@
 uint8_t				 purge_finished_db = 1;
 uint8_t				 purge_finished_fs = 1;
 uint8_t				 clear_playlist_on_start = 0;
+char			       **sustainerpaths;
+uint8_t				 sustainer_pos = 0, sustainer_count = 0;
+int				 sustaining = 0;
 
 /*
  * clean up, exit. if exit_ok = 0, an error (signal/error)
@@ -71,6 +74,7 @@ hgd_play_track(struct hgd_playlist_item *t)
 	fl.l_len    = 0;        /* length, 0 = to EOF           */
 	fl.l_pid    = getpid(); /* our PID                      */
 
+
 	DPRINTF(HGD_D_INFO, "Playing '%s' for '%s'", t->filename, t->user);
 	if (hgd_mark_playing(t->id) == HGD_FAIL)
 		hgd_exit_nicely();
@@ -78,7 +82,7 @@ hgd_play_track(struct hgd_playlist_item *t)
 	/* we will write away child pid */
 	xasprintf(&pid_path, "%s/%s", state_path, HGD_MPLAYER_PID_NAME);
 
-	pid_file = fopen(pid_path, "w");
+	pid_file = fopen(pid_path, "w+");
 	if (pid_file == NULL) {
 		DPRINTF(HGD_D_ERROR, "Can't open '%s'", pid_path);
 		free(pid_path);
@@ -93,6 +97,20 @@ hgd_play_track(struct hgd_playlist_item *t)
 	if (chmod(pid_path, S_IRUSR | S_IWUSR) != 0)
 		DPRINTF(HGD_D_WARN, "Can't secure mplayer pid file");
 
+
+	waitpid(sustaining, &status, WNOWAIT);
+	/* Kill the sustainer */
+	if (sustaining && (status == 0)) {
+		int myerr;
+		DPRINTF(HGD_D_DEBUG, "trying to kill sustainer %d", sustaining);
+		if ((myerr = kill(sustaining, SIGINT))) {
+			/* XXX mplayer may have crashed.... */
+			DPRINTF(HGD_D_ERROR, "could not kill %d. err=%d (%s)", sustaining, myerr, SERROR);
+		}
+		waitpid(sustaining, &status, 0);
+		sustaining = 0;
+	}
+
 	pid = fork();
 	if (!pid) {
 		/* child - your the d00d who will play this track */
@@ -103,7 +121,7 @@ hgd_play_track(struct hgd_playlist_item *t)
 		DPRINTF(HGD_D_ERROR, "execlp() failed");
 		hgd_exit_nicely();
 	} else {
-		fprintf(pid_file, "%d", pid);
+		fprintf(pid_file, "%d\n%d", pid, t->id);
 
 		fl.l_type = F_UNLCK;  /* set to unlock same region */
 
@@ -113,21 +131,32 @@ hgd_play_track(struct hgd_playlist_item *t)
 		}
 
 		fclose(pid_file);
-		wait(&status);
+		if (t->sustainer) {
+			sustaining = pid;
+			/* XXX: ZOMBIES BE HERE? */
+		} else {
+			waitpid(pid, &status, 0);
+
+
+		}
+
+
 
 		/* unlink mplayer pid path */
 		DPRINTF(HGD_D_DEBUG, "Deleting mplayer pid file");
 		if (unlink(pid_path) < 0) {
 			DPRINTF(HGD_D_WARN, "Can't unlink '%s'", pid_path);
 		}
-		free(pid_path);
+
 
 		/* unlink media */
-		if ((purge_finished_fs) && (unlink(t->filename) < 0)) {
+		if ((purge_finished_fs) && (unlink(t->filename) < 0) && t->id != -1) {
 			DPRINTF(HGD_D_DEBUG,
 			    "Deleting finished: %s", t->filename);
 			DPRINTF(HGD_D_WARN, "Can't unlink '%s'", pid_path);
 		}
+
+		free(pid_path);
 	}
 
 	DPRINTF(HGD_D_DEBUG, "Finished playing (exit %d)", status);
@@ -158,10 +187,28 @@ hgd_play_loop()
 			hgd_clear_votes();
 			hgd_play_track(&track);
 		} else {
-			DPRINTF(HGD_D_DEBUG, "no tracks to play");
+			if (sustainer_count > 0) {
+				if (!sustaining) {
+					track.filename =
+					    sustainerpaths[sustainer_pos];
+					sustainer_pos = (sustainer_pos + 1) %
+					    sustainer_count;
+					track.id = -1;
+					track.user = "sustainer";
+					track.sustainer = 1;
+					hgd_play_track(&track);
+				} else {
+					DPRINTF(HGD_D_DEBUG,
+					    "Already sustaining");
+				}
+			} else {
+				DPRINTF(HGD_D_DEBUG, "no tracks to play");
+			}
 			sleep(1);
 		}
-		hgd_free_playlist_item(&track);
+		if (track.id != -1) {
+			hgd_free_playlist_item(&track);
+		}
 	}
 
 	if (dying)
@@ -267,7 +314,7 @@ main(int argc, char **argv)
 	state_path = xstrdup(HGD_DFL_DIR);
 
 	DPRINTF(HGD_D_DEBUG, "Parsing options:1");
-	while ((ch = getopt(argc, argv, "Cd:hpqvx:")) != -1) {
+	while ((ch = getopt(argc, argv, "Cd:hpqQ:vx:")) != -1) {
 		switch (ch) {
 		case 'c':
 			num_config++;
@@ -292,7 +339,7 @@ main(int argc, char **argv)
 	RESET_GETOPT();
 
 	DPRINTF(HGD_D_DEBUG, "Parsing options");
-	while ((ch = getopt(argc, argv, "Cd:hpqvx:")) != -1) {
+	while ((ch = getopt(argc, argv, "Cd:hpqvx:Q:")) != -1) {
 		switch (ch) {
 		case 'C':
 			clear_playlist_on_start = 1;
@@ -311,6 +358,12 @@ main(int argc, char **argv)
 		case 'q':
 			DPRINTF(HGD_D_DEBUG, "No purging from db");
 			purge_finished_db = 0;
+			break;
+		case 'Q':
+			DPRINTF(HGD_D_DEBUG, "Sustainer enabled: %s", optarg);
+			++sustainer_count;
+			sustainerpaths = xrealloc(sustainerpaths, sustainer_count * sizeof(char*));
+			sustainerpaths[sustainer_count - 1] = xstrdup(optarg);
 			break;
 		case 'v':
 			hgd_print_version();

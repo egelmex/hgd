@@ -103,6 +103,7 @@ struct hgd_playlist_item {
 	char			*user;
 	uint8_t			 playing;
 	uint8_t			 finished;
+	uint8_t			 sustainer;
 };
 
 struct hgd_playlist {
