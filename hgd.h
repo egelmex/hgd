@@ -23,8 +23,8 @@
 #endif
 
 #define HGD_VERSION		PACKAGE_VERSION
-#define HGD_PROTO_VERSION_MAJOR	3
-#define HGD_PROTO_VERSION_MINOR 0
+#define HGD_PROTO_VERSION_MAJOR	4
+#define HGD_PROTO_VERSION_MINOR 1
 
 /* misc */
 #define HGD_DFL_REQ_VOTES	3
@@ -39,7 +39,6 @@
 /* paths */
 #define HGD_DFL_DIR		"/var/hgd"
 #define HGD_DB_NAME		"hgd.db"
-#define HGD_MPLAYER_PID_NAME	"mplayer.pid"
 #define HGD_FILESTORE_NAME	"files"
 #define HGD_DFL_SVR_CONF_DIR	"/etc/hgd"
 
