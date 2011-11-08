@@ -40,7 +40,7 @@ sampledir?=${datarootdir}/examples/hgd
 pysupportdir=${datarootdir}/hgd/pylib/hgd
 
 .PHONY: all
-all: @ALL_TARGETS@
+all: @ALL_TARGETS@ hgd-playd-vlc
 
 .PHONY: clean
 clean:
@@ -69,15 +69,24 @@ common.o: common.c hgd.h config.h
 db.o: db.c hgd.h config.h db.h
 	${CC} ${CPPFLAGS} ${SQL_CFLAGS} ${CFLAGS} -c -o db.o db.c
 
-mplayer.o: mplayer.c mplayer.h py.o
+mplayer.o: mplayer.c playback.h py.o
 	${CC} ${SQL_CFLAGS} ${PY_CFLAGS} ${CPPFLAGS} ${CFLAGS} \
 		-c -o mplayer.o mplayer.c
+
+vlc.o: vlc.c playback.h 
+	${CC} ${CPPFLAGS} ${CFLAGS} -c -o vlc.o vlc.c
 
 hgd-playd: common.o db.o py.o hgd-playd.c hgd.h config.h crypto.o mplayer.o cfg.o
 	${CC} ${CPPFLAGS} ${SQL_CFLAGS} ${PY_CFLAGS} ${CFLAGS} ${SQL_LDFLAGS} \
 		${SSL_LDFLAGS} ${LDFLAGS} ${PY_LDFLAGS} ${BSD_LDFLAGS} \
 		${CONFIG_LDFLAGS} -o hgd-playd db.o common.o \
 		crypto.o py.o mplayer.o cfg.o hgd-playd.c
+
+hgd-playd-vlc: common.o db.o py.o hgd-playd.c hgd.h config.h crypto.o vlc.o cfg.o
+	${CC} ${CPPFLAGS} ${SQL_CFLAGS} ${PY_CFLAGS} ${CFLAGS} ${SQL_LDFLAGS} \
+		${SSL_LDFLAGS} ${LDFLAGS} ${PY_LDFLAGS} ${BSD_LDFLAGS} \
+		${CONFIG_LDFLAGS} -lvlc -o hgd-playd-vlc db.o common.o \
+		crypto.o py.o vlc.o cfg.o hgd-playd.c
 
 hgd-netd: cfg.o common.o net.o mplayer.o hgd-netd.c hgd.h db.o cfg.o crypto.o user.o
 	${CC} ${TAG_CFLAGS} ${TAG_LDFLAGS} ${CPPFLAGS} ${SQL_CFLAGS} \

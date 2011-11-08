@@ -38,6 +38,7 @@
 #include "db.h"
 #include "user.h"
 #include "mplayer.h"
+#include "playback.h"
 
 const char			*hgd_component = HGD_COMPONENT_HGD_ADMIN;
 

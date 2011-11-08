@@ -51,6 +51,7 @@
 #include "db.h"
 #include "hgd.h"
 #include "mplayer.h"
+#include "playback.h"
 #include "net.h"
 #include <openssl/ssl.h>
 #ifdef HAVE_TAGLIB

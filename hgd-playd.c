@@ -45,7 +45,7 @@
 #endif
 #include "db.h"
 #include "hgd.h"
-#include "mplayer.h"
+#include "playback.h"
 
 const char			*hgd_component = HGD_COMPONENT_HGD_PLAYD;
 
@@ -63,8 +63,7 @@ hgd_exit_nicely()
 	if (!exit_ok)
 		DPRINTF(HGD_D_ERROR, "hgd-playd was interrupted or crashed\n");
 
-	if (mplayer_fifo_path)
-		free(mplayer_fifo_path);
+	hgd_playback_clean();
 	if (db)
 		sqlite3_close(db);
 	if (state_path)
@@ -304,8 +303,11 @@ main(int argc, char **argv)
 
 	xasprintf(&db_path, "%s/%s", state_path, HGD_DB_NAME);
 	xasprintf(&filestore_path, "%s/%s", state_path, HGD_FILESTORE_NAME);
-	xasprintf(&mplayer_fifo_path, "%s/%s",
-	    state_path, HGD_MPLAYER_PIPE_NAME);
+
+	hgd_playback_init (state_path);
+
+/*	xasprintf(&mplayer_fifo_path, "%s/%s",
+	    state_path, HGD_MPLAYER_PIPE_NAME);*/
 
 	umask(~S_IRWXU);
 	hgd_mk_state_dir();

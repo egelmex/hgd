@@ -35,10 +35,27 @@
 #include <string.h>
 
 #include "hgd.h"
+#include "playback.h"
 #include "mplayer.h"
 #include "db.h"
 
 char			*mplayer_fifo_path = 0;
+
+
+int hgd_playback_init(const char *state_path)
+{
+	xasprintf(&mplayer_fifo_path, "%s/%s",
+	    state_path, HGD_MPLAYER_PIPE_NAME);
+
+	return (HGD_OK);
+}
+
+int hgd_playback_clean()
+{
+	if (mplayer_fifo_path)
+		free(mplayer_fifo_path);
+	return (HGD_OK);
+}
 
 int
 hgd_mplayer_pipe_send(char *what)
