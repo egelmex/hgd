@@ -364,9 +364,10 @@ hgd_client_login(int fd, SSL *ssl, char *username)
 
 	free(resp);
 
-	if (login_ok == HGD_OK)
+	if (login_ok == HGD_OK) {
+		authenticated = 1;
 		DPRINTF(HGD_D_DEBUG, "Identified as %s", user);
-	else
+	} else
 		DPRINTF(HGD_D_WARN, "Login as %s failed", user);
 
 	return (login_ok);
@@ -478,7 +479,7 @@ hgd_usage()
 	printf("    user-add <user> [password]\tAdd a user\n");
 	printf("    user-del <user>\t\tRemove a user\n");
 	printf("    user-list\t\t\tList Users\n");
-	printf("    user-mkadmin <user>\tGrant user admin rights\n");
+	printf("    user-mkadmin <user>\t\tGrant user admin rights\n");
 	printf("    user-noadmin <user>\t\tRevoke user admin rights\n");
 
 	printf("\n  Options include:\n");
