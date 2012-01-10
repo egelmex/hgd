@@ -19,11 +19,12 @@
 #define HGD_ADMIN_H
 
 #include "hgd.h"
+#include "sqlite3.h"
 
-int			 hgd_user_list(struct hgd_user_list **);
-int			 hgd_user_mod_perms(char *uname,
+int			 hgd_user_list(sqlite3 *db, char *db_path, struct hgd_user_list **);
+int			 hgd_user_mod_perms(sqlite3 *db, char *db_path, char *uname,
 			    int perm_mask, uint8_t set);
-int			 hgd_user_del(char *uname);
-int			 hgd_user_add(char *user, char *pass);
+int			 hgd_user_del(sqlite3 *db, char *uname);
+int			 hgd_user_add(sqlite3 *db, char *db_path, char *user, char *pass);
 
 #endif

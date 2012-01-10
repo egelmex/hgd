@@ -32,9 +32,6 @@
 #include "hgd.h"
 #include "db.h"
 
-sqlite3				*db = NULL;
-char				*db_path = NULL;
-
 int
 hgd_get_db_vers_cb(void *arg, int argc, char **data, char **names)
 {
@@ -272,7 +269,7 @@ hgd_get_playing_item_cb(void *arg, int argc, char **data, char **names)
 }
 
 int
-hgd_get_playing_item(struct hgd_playlist_item *playing)
+hgd_get_playing_item(sqlite3 *db, struct hgd_playlist_item *playing)
 {
 	int				 sql_res;
 
@@ -303,7 +300,7 @@ hgd_get_num_votes_cb(void *arg, int argc, char **data, char **names)
 }
 
 int
-hgd_get_num_votes(int *nvotes)
+hgd_get_num_votes(sqlite3 *db, int *nvotes)
 {
 	int			sql_res;
 	char			*sql;
@@ -322,7 +319,7 @@ hgd_get_num_votes(int *nvotes)
 }
 
 int
-hgd_user_has_voted(char *user, int *v)
+hgd_user_has_voted(sqlite3 *db, char *user, int *v)
 {
 	int			 ret = HGD_FAIL;
 	int			 sql_res;
@@ -361,7 +358,7 @@ clean:
 }
 
 int
-hgd_insert_track(char *filename, struct hgd_media_tag *t, char *user)
+hgd_insert_track(sqlite3 *db, char *filename, struct hgd_media_tag *t, char *user)
 {
 	int			 ret = HGD_FAIL;
 	int			 sql_res;
@@ -410,7 +407,7 @@ clean:
 }
 
 int
-hgd_insert_vote(char *user)
+hgd_insert_vote(sqlite3 *db, char *user)
 {
 	int			 ret = HGD_FAIL;
 	int			 sql_res;
@@ -488,7 +485,7 @@ hgd_get_playlist_cb(void *arg, int argc, char **data, char **names)
  * report back items in the playlist
  */
 int
-hgd_get_playlist(struct hgd_playlist *list)
+hgd_get_playlist(sqlite3 *db, struct hgd_playlist *list)
 {
 	int			sql_res;
 
@@ -535,7 +532,7 @@ hgd_get_next_track_cb(void *item, int argc, char **data, char **names)
 
 /* get the next track (if there is one) */
 int
-hgd_get_next_track(struct hgd_playlist_item *track)
+hgd_get_next_track(sqlite3 *db, struct hgd_playlist_item *track)
 {
 	int			 sql_res;
 
@@ -554,7 +551,7 @@ hgd_get_next_track(struct hgd_playlist_item *track)
 
 /* mark it as playing in the database */
 int
-hgd_mark_playing(int id)
+hgd_mark_playing(sqlite3 *db, int id)
 {
 	int			 sql_res, ret = HGD_FAIL;
 	sqlite3_stmt		*stmt;
@@ -587,7 +584,7 @@ clean:
 }
 
 int
-hgd_mark_finished(int id, uint8_t purge)
+hgd_mark_finished(sqlite3 *db, int id, uint8_t purge)
 {
 	int			 sql_res;
 	char			*q_purge = "DELETE FROM playlist WHERE "
@@ -633,7 +630,7 @@ clean:
 }
 
 int
-hgd_clear_votes()
+hgd_clear_votes(sqlite3 *db)
 {
 	char			*query = "DELETE FROM votes;";
 	int			sql_res;
@@ -649,7 +646,7 @@ hgd_clear_votes()
 }
 
 int
-hgd_init_playstate()
+hgd_init_playstate(sqlite3 *db)
 {
 	int			 sql_res;
 
@@ -666,7 +663,7 @@ hgd_init_playstate()
 }
 
 int
-hgd_clear_playlist()
+hgd_clear_playlist(sqlite3 *db)
 {
 	char			*query = "DELETE FROM playlist;";
 	int			sql_res;
@@ -677,7 +674,7 @@ hgd_clear_playlist()
 		DPRINTF(HGD_D_ERROR, "Can't clear playlist");
 		return (HGD_FAIL);
 	}
-	hgd_clear_votes();
+	hgd_clear_votes(db);
 
 	return (HGD_OK);
 }
@@ -688,7 +685,7 @@ hgd_clear_playlist()
  * you probably want hgd_user_add() from admin.c
  */
 int
-hgd_user_add_db(char *user, char *salt, char *hash)
+hgd_user_add_db(sqlite3 *db, char *user, char *salt, char *hash)
 {
 	int			 sql_res, ret = HGD_FAIL;
 	sqlite3_stmt		*stmt;
@@ -728,7 +725,7 @@ clean:
 }
 
 int
-hgd_user_mod_perms_db(struct hgd_user *user)
+hgd_user_mod_perms_db(sqlite3 *db,struct hgd_user *user)
 {
 	int			sql_res;
 	sqlite3_stmt		*stmt;
@@ -776,7 +773,7 @@ clean:
  * caller must free dynamic fields
  */
 int
-hgd_get_user(char *user, struct hgd_user *result)
+hgd_get_user(sqlite3 *db, char *user, struct hgd_user *result)
 {
 	int			 sql_res, res = HGD_OK;
 	sqlite3_stmt		*stmt;
@@ -819,7 +816,7 @@ clean:
 }
 
 struct hgd_user *
-hgd_authenticate_user(char *user, char *pass)
+hgd_authenticate_user(sqlite3 *db, char *user, char *pass)
 {
 	int			 sql_res;
 	sqlite3_stmt		*stmt;
@@ -879,7 +876,7 @@ clean:
  * remove user from db forever
  */
 int
-hgd_user_del_db(char *uname)
+hgd_user_del_db(sqlite3 *db,char *uname)
 {
 	int			 sql_res, ret = HGD_FAIL, lookup_ret;
 	sqlite3_stmt		*stmt = NULL;
@@ -887,7 +884,7 @@ hgd_user_del_db(char *uname)
 	struct hgd_user		 user;
 
 	/* look up the user so that we can report non-existency */
-	if ((lookup_ret = hgd_get_user(uname, &user)) != HGD_OK) {
+	if ((lookup_ret = hgd_get_user(db, uname, &user)) != HGD_OK) {
 		ret = lookup_ret;
 		goto clean;
 	}
@@ -943,7 +940,7 @@ hgd_get_all_users_cb(void *arg, int argc, char **data, char **names)
 }
 
 int
-hgd_num_tracks_user(char *username)
+hgd_num_tracks_user(sqlite3 *db,char *username)
 {
 	int			 sql_res, ret = HGD_FAIL;
 	sqlite3_stmt		*stmt;
@@ -976,7 +973,7 @@ clean:
 
 /* get all users from the db, caler must free */
 struct hgd_user_list *
-hgd_get_all_users()
+hgd_get_all_users(sqlite3 *db)
 {
 	int			 sql_res;
 	struct hgd_user_list	*list = xcalloc(1, sizeof(struct hgd_user_list));

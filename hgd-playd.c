@@ -159,7 +159,7 @@ hgd_play_track(struct hgd_playlist_item *t, uint8_t purge_fs, uint8_t purge_db)
 
 		/* child - your the d00d who will play this track */
 		execlp("mplayer", "mplayer", "-really-quiet", "-slave",
-		    "-input", pipe_arg, t->filename, "-vo", "null",
+		    "-input", pipe_arg, t->filename,
 		    (char *) NULL);
 
 		/* if we get here, the shit hit the fan with execlp */

@@ -24,7 +24,7 @@
 #include "mplayer.h"
 
 int
-hgd_user_add(char *user, char *pass)
+hgd_user_add(sqlite3 *db, char *db_path, char *user, char *pass)
 {
 	unsigned char		 salt[HGD_SHA_SALT_SZ];
 	char			*salt_hex = NULL, *hash_hex = NULL;
@@ -56,7 +56,7 @@ hgd_user_add(char *user, char *pass)
 	hgd_bytes_to_hex_buf(hash_hex, hash_ascii, HGD_SHA_SALT_SZ);
 	DPRINTF(HGD_D_DEBUG, "new_user's hash '%s'", hash_ascii);
 
-	ret = hgd_user_add_db(user, salt_hex, hash_hex);
+	ret = hgd_user_add_db(db, user, salt_hex, hash_hex);
 clean:
 	if (salt_hex)
 		free(salt_hex);
@@ -67,7 +67,7 @@ clean:
 }
 
 int
-hgd_user_list(struct hgd_user_list **list)
+hgd_user_list(sqlite3 *db, char *db_path, struct hgd_user_list **list)
 {
 	int		ret = HGD_FAIL;
 
@@ -77,7 +77,7 @@ hgd_user_list(struct hgd_user_list **list)
 	if (db == NULL)
 		goto clean;
 
-	if ((*list = hgd_get_all_users()) == NULL) {
+	if ((*list = hgd_get_all_users(db)) == NULL) {
 		DPRINTF(HGD_D_WARN, "Failed to get userlist");
 		goto clean;
 	}
@@ -92,7 +92,7 @@ clean:
  * indicated by 'perm_mask'.
  */
 int
-hgd_user_mod_perms(char *uname, int perm_mask, uint8_t set)
+hgd_user_mod_perms(sqlite3 *db, char *db_path, char *uname, int perm_mask, uint8_t set)
 {
 	struct hgd_user		user;
 	int			ret = HGD_FAIL, new_perms = 0;
@@ -105,7 +105,7 @@ hgd_user_mod_perms(char *uname, int perm_mask, uint8_t set)
 	if (db == NULL)
 		goto clean;
 
-	if (hgd_get_user(uname, &user) == HGD_FAIL_USRNOEXIST) {
+	if (hgd_get_user(db, uname, &user) == HGD_FAIL_USRNOEXIST) {
 		DPRINTF(HGD_D_ERROR, "User %s does not exist.", user.name);
 		ret = HGD_FAIL_USRNOEXIST;
 		goto clean;
@@ -126,7 +126,7 @@ hgd_user_mod_perms(char *uname, int perm_mask, uint8_t set)
 
 	/* otherwise, update */
 	user.perms = new_perms;
-	ret = hgd_user_mod_perms_db(&user);
+	ret = hgd_user_mod_perms_db(db, &user);
 clean:
 	if (user.name)
 		free(user.name);
@@ -135,8 +135,8 @@ clean:
 }
 
 int
-hgd_user_del(char *uname)
+hgd_user_del(sqlite3 *db, char *uname)
 {
-	return (hgd_user_del_db(uname));
+	return (hgd_user_del_db(db, uname));
 }
 

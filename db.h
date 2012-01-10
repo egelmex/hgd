@@ -27,36 +27,33 @@
 
 #define	HGD_DB_SCHEMA_VERS	"1"
 
-extern sqlite3			*db;
-extern char			*db_path;
-
 sqlite3				*hgd_open_db(char *, uint8_t);
 int				 hgd_get_playing_item_cb(void *arg,
 				     int argc, char **data, char **names);
-int				 hgd_get_playing_item(
+int				 hgd_get_playing_item(sqlite3 *db,
 				     struct hgd_playlist_item *playing);
 int				 hgd_get_num_votes_cb(void *arg,
 				     int argc, char **data, char **names);
-int				 hgd_get_num_votes(int *nv);
-int				 hgd_insert_track(char *filename,
+int				 hgd_get_num_votes(sqlite3 *db, int *nv);
+int				 hgd_insert_track(sqlite3 *db, char *filename,
 				     struct hgd_media_tag *, char *user);
-int				 hgd_insert_vote(char *user);
-int				 hgd_get_playlist(struct hgd_playlist *list);
-int				 hgd_get_next_track(
+int				 hgd_insert_vote(sqlite3 *db, char *user);
+int				 hgd_get_playlist(sqlite3 *db, struct hgd_playlist *list);
+int				 hgd_get_next_track(sqlite3 *db,
 				     struct hgd_playlist_item *track);
-int				 hgd_mark_playing(int id);
-int				 hgd_mark_finished(int id, uint8_t purge);
-int				 hgd_clear_votes(void);
-int				 hgd_clear_playlist(void);
-int				 hgd_init_playstate(void);
-int				 hgd_user_add_db(char *usr, char *slt, char *hash);
-struct hgd_user			*hgd_authenticate_user(char *user, char *pass);
-int				 hgd_user_del_db(char *user);
-struct hgd_user_list		*hgd_get_all_users(void);
-int				 hgd_num_tracks_user(char *username);
+int				 hgd_mark_playing(sqlite3 *db, int id);
+int				 hgd_mark_finished(sqlite3 *db, int id, uint8_t purge);
+int				 hgd_clear_votes(sqlite3 *db);
+int				 hgd_clear_playlist(sqlite3 *db);
+int				 hgd_init_playstate(sqlite3 *db);
+int				 hgd_user_add_db(sqlite3 *db, char *usr, char *slt, char *hash);
+struct hgd_user			*hgd_authenticate_user(sqlite3 *db, char *user, char *pass);
+int				 hgd_user_del_db(sqlite3 *db, char *user);
+struct hgd_user_list		*hgd_get_all_users(sqlite3 *db);
+int				 hgd_num_tracks_user(sqlite3 *db, char *username);
 int				 hgd_make_new_db(char *db_path);
-int				 hgd_user_mod_perms_db(struct hgd_user *user);
-int				 hgd_user_has_voted(char *user, int *v);
-int				 hgd_get_user(char *user, struct hgd_user *result);
+int				 hgd_user_mod_perms_db(sqlite3 *db, struct hgd_user *user);
+int				 hgd_user_has_voted(sqlite3 *db, char *user, int *v);
+int				 hgd_get_user(sqlite3 *db,char *user, struct hgd_user *result);
 
 #endif

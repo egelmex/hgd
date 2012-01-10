@@ -12,6 +12,9 @@ SSL_LDFLAGS=@SSL_LIBS@
 CONFIG_CFLAGS=@LIBCONFIG_CFLAGS@
 CONFIG_LDFLAGS=@LIBCONFIG_LIBS@
 
+EVENT_CFLAGS=@EVENT_CFLAGS@
+EVENT_LDFLAGS=@EVENT_LIBS@
+
 BSD_CFLAGS=@BSD_CFLAGS@
 BSD_LDFLAGS=@BSD_LIBS@
 
@@ -96,12 +99,13 @@ hgd-playd: common.o db.o py.o hgd-playd.c hgd.h config.h crypto.o mplayer.o cfg.
 		${BSD_LDFLAGS} ${CONFIG_LDFLAGS} \
 		-o hgd-playd 
 
-hgd-netd: cfg.o common.o net.o mplayer.o hgd-netd.c hgd.h db.o cfg.o crypto.o user.o
+hgd-netd: cfg.o common.o net.o mplayer.o hgd-netd-event.c hgd.h db.o cfg.o crypto.o user.o
 	@echo "\n--> Building: \"hgd-netd\""
-	${CC} hgd-netd.c ${TAG_CFLAGS} ${CPPFLAGS} ${SQL_CFLAGS} ${CFLAGS} ${PY_CFLAGS} \
+	${CC} hgd-netd-event.c ${TAG_CFLAGS} ${CPPFLAGS} ${SQL_CFLAGS} ${CFLAGS} ${PY_CFLAGS} \
+		${EVENT_CFLAGS} \
 		mplayer.o cfg.o common.o db.o net.o crypto.o user.o \
 		${TAG_LDFLAGS} ${SQL_LDFLAGS} ${SSL_LDFLAGS} ${LDFLAGS} \
-		${BSD_LDFLAGS} ${CONFIG_LDFLAGS} \
+		${BSD_LDFLAGS} ${CONFIG_LDFLAGS} ${EVENT_LDFLAGS} \
 		-o hgd-netd
 
 hgdc: client.o common.o net.o cfg.o hgdc.c hgd.h config.h

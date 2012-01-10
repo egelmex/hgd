@@ -116,6 +116,8 @@ extern const char		 *hgd_component;
 extern char			 *state_path;
 extern char			 *filestore_path;
 
+
+
 struct hgd_user {
 	char			*name;
 	int			 perms;
@@ -162,6 +164,15 @@ struct hgd_session {
 	SSL			*ssl;
 };
 
+typedef struct {
+	struct evbuffer		*in;
+	struct evbuffer		*out;
+	int			 num_bad_commands;
+	char			*cli_str;
+	struct hgd_user		*user;
+	int			 is_ssl;
+} con_t;
+
 struct hgd_admin_cmd {
 	char			*cmd;
 	int			num_args;
@@ -183,6 +194,24 @@ struct hgd_cmd_despatch {
 	uint8_t			 auth_needed;
 	uint8_t			 authlevel;
 	int			(*handler)(struct hgd_session *, char **);
+};
+
+
+/* server command despatch */
+struct hgd_cmd_despatch_event {
+	char			*cmd;
+	uint8_t			 n_args;
+	/*
+	 * read carefully:
+	 * 'secure' means that when the server is ONLY accepting SSL
+	 * connections, the client must have sent an 'encrypt' command
+	 * which has completed successfully before this command can
+	 * be used.
+	 */
+	uint8_t			 secure;
+	uint8_t			 auth_needed;
+	uint8_t			 authlevel;
+	int			(*handler)(con_t *, char **);
 };
 
 /* client request despatch */
