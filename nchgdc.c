@@ -35,6 +35,7 @@
 #define	HGD_CPAIR_BARS				1
 #define HGD_CPAIR_SELECTED			2
 #define HGD_CPAIR_DIALOG			3
+#define	HGD_CPAIR_PBAR_BG			4
 
 #define HGD_LOG_BACKBUFFER			4096
 
@@ -64,34 +65,17 @@ const char *window_names[] = {
 	"Debug Console"
 };
 
-const char *test_playlist[] = {
-	"Gunther.ogg",
-	"Crabs.mp3",
-	"Some longer file name with spaces.ogg",
-	"Some track4",
-	"Some track5",
-	"Some track6",
-	"Some track7",
-	"Some track8",
-	"Some track10",
-	"Some track11",
-	"Some track11",
-	"Some track12",
-	"Some track15",
-	"Some track13",
-	"Some track12",
-	NULL
-};
-
 struct hgd_ui_log			logs;
 
 void
 hgd_exit_nicely()
 {
-	endwin();
+	if (endwin() == ERR)
+		DPRINTF(HGD_D_ERROR, "Failed to exit curses");
 
 	if (!exit_ok) {
 		DPRINTF(HGD_D_ERROR, "nchgdc crashed or was interrupted");
+		/* XXX why not printed??? */
 		printf("ERROR: nchgdc crashed or was interrupted!"
 		    " Please examine the log file\n");
 	}
@@ -170,24 +154,33 @@ hgd_update_statusbar(struct ui *u)
 	wattron(u->status, COLOR_PAIR(HGD_CPAIR_BARS));
 
 	xasprintf(&fmt, "%%-%ds", COLS);
-	wprintw(u->status, fmt,  "User: edd\tHasVote: Yes");
+	wprintw(u->status, fmt, u->status_str);
 	free (fmt);
+}
+
+void
+hgd_refresh_statusbar(struct ui *u)
+{
+	hgd_update_statusbar(u);
+	wrefresh(u->status);
 }
 
 void
 hgd_refresh_ui(struct ui *u)
 {
 	redrawwin(u->content_wins[u->active_content_win]);
-	wrefresh(u->content_wins[u->active_content_win]);
+	wnoutrefresh(u->content_wins[u->active_content_win]);
 
 	hgd_update_titlebar(u);
-	wrefresh(u->title);
+	wnoutrefresh(u->title);
 
 	hgd_update_statusbar(u);
-	wrefresh(u->status);
+	wnoutrefresh(u->status);
+
+	doupdate();
 }
 
-void
+int
 init_log()
 {
 	char *logfile = NULL;
@@ -198,12 +191,12 @@ init_log()
 	DPRINTF(HGD_D_INFO, "UI logging to '%s'", logfile);
 	if ((logs.wr = fopen(logfile, "w")) == NULL) {
 		DPRINTF(HGD_D_ERROR, "Could not open write log: %s", SERROR);
-		exit (1); /* XXX */
+		return (HGD_FAIL);
 	}
 
 	if ((logs.rd = fopen(logfile, "r")) == NULL) {
 		DPRINTF(HGD_D_ERROR, "Could not open read log: %s", SERROR);
-		exit (1); /* XXX */
+		return (HGD_FAIL);
 	}
 
 	free(logfile);
@@ -211,6 +204,8 @@ init_log()
 	/* Redirect stderr here, so that DPRINTF can still work */
 	close(fileno(stderr));
 	dup(fileno(logs.wr));
+
+	return (HGD_OK);
 }
 
 void
@@ -242,8 +237,70 @@ hgd_update_titlebar(struct ui *u)
 int
 hgd_update_playlist_win(struct ui *u)
 {
+	ITEM			**items;
+	int			  i;
+	char			 *item_str;
+	struct hgd_playlist	 *playlist;
+	char			 *track_str;
+
 	DPRINTF(HGD_D_INFO, "Update playlist window");
-	/* XXX */
+
+	hgd_set_statusbar_text(u, "Connected >>> Fetching playlist");
+	hgd_update_statusbar(u);
+	hgd_refresh_ui(u);
+
+	if (sock_fd == -1)
+		return (HGD_OK); /* not connected yet */
+
+	/* and now populate the menu */
+	if (hgd_cli_get_playlist(&playlist) != HGD_OK)
+		return (HGD_FAIL);
+
+	items = xcalloc(playlist->n_items + 1, sizeof(ITEM *));
+	for (i = 0; i < playlist->n_items; i++) {
+
+		DPRINTF(HGD_D_DEBUG, "Adding item \"%s\"",
+		    playlist->items[i]->tags.title);
+
+		if ((strcmp(playlist->items[i]->tags.artist, "")) ||
+		    (strcmp(playlist->items[i]->tags.title, ""))) {
+
+			xasprintf(&track_str, "#%03d from %-8s: '%s' by '%s'",
+			    playlist->items[i]->id,
+			    playlist->items[i]->user,
+			    playlist->items[i]->tags.title,
+			    playlist->items[i]->tags.artist);
+		} else  {
+			xasprintf(&track_str, "#%03d from %-8s: '%s'",
+			    playlist->items[i]->id,
+			    playlist->items[i]->user,
+			    playlist->items[i]->filename);
+		}
+
+		hgd_prepare_item_string(&item_str, track_str);
+		free(track_str);
+
+		items[i] = new_item(item_str, NULL);
+		if (items[i] == NULL)
+			DPRINTF(HGD_D_WARN, "Could not make new item: %s", SERROR);
+	}
+
+	u->content_menus[HGD_WIN_PLAYLIST] = new_menu(items);
+	if (u->content_menus[HGD_WIN_PLAYLIST] == NULL)
+			DPRINTF(HGD_D_ERROR, "Could not make menu");
+
+	set_menu_win(u->content_menus[HGD_WIN_PLAYLIST],
+	    u->content_wins[HGD_WIN_PLAYLIST]);
+	set_menu_mark(u->content_menus[HGD_WIN_PLAYLIST], "");
+	set_menu_format(u->content_menus[HGD_WIN_PLAYLIST], LINES - 2, 1);
+	set_menu_fore(u->content_menus[HGD_WIN_PLAYLIST],
+	    COLOR_PAIR(HGD_CPAIR_SELECTED));
+
+	if ((post_menu(u->content_menus[HGD_WIN_PLAYLIST])) != E_OK)
+		DPRINTF(HGD_D_ERROR, "Could not post menu");
+
+	hgd_set_standard_statusbar_text(u);
+
 	return (HGD_OK);
 }
 
@@ -319,9 +376,7 @@ hgd_update_files_win(struct ui *u)
 
 			/* jam away the dirent for later use */
 			dirent_copy = xcalloc(1, sizeof(struct dirent));
-			DPRINTF(HGD_D_INFO, "TEST TEST TEST1: %s", dirent->d_name);
 			memcpy(dirent_copy, dirent, sizeof(struct dirent));
-			DPRINTF(HGD_D_INFO, "TEST TEST TEST: %s", dirent_copy->d_name);
 			set_item_userptr(items[cur_index], dirent_copy);
 
 			if (items[cur_index] == NULL)
@@ -510,16 +565,14 @@ hgd_init_statusbar(struct ui *u)
 		return (HGD_FAIL);
 	}
 
+	u->status_str = xstrdup("***");
+
 	return (HGD_OK);
 }
 
 int
 hgd_init_playlist_win(struct ui *u)
 {
-	ITEM			**items;
-	int			  n_items, i;
-	char			 *item_str;
-
 	DPRINTF(HGD_D_INFO, "Initialise playlist window");
 
 	/* make window */
@@ -530,33 +583,6 @@ hgd_init_playlist_win(struct ui *u)
 	}
 
 	keypad(u->content_wins[HGD_WIN_PLAYLIST], TRUE);
-
-	/* and now populate the menu */
-	n_items = ARRAY_SIZE(test_playlist);
-
-	items = xcalloc(n_items, sizeof(ITEM *));
-	for (i = 0; i < n_items - 1; i++) {
-		DPRINTF(HGD_D_DEBUG, "Adding item \"%s\"", test_playlist[i]);
-
-		hgd_prepare_item_string(&item_str, (char *) test_playlist[i]);
-
-		items[i] = new_item(item_str, NULL);
-		if (items[i] == NULL)
-			DPRINTF(HGD_D_WARN, "Could not make new item: %s", SERROR);
-	}
-
-	u->content_menus[HGD_WIN_PLAYLIST] = new_menu(items);
-	if (u->content_menus[HGD_WIN_PLAYLIST] == NULL)
-			DPRINTF(HGD_D_ERROR, "Could not make menu");
-
-	set_menu_win(u->content_menus[HGD_WIN_PLAYLIST], u->content_wins[HGD_WIN_PLAYLIST]);
-	set_menu_mark(u->content_menus[HGD_WIN_PLAYLIST], "");
-	set_menu_format(u->content_menus[HGD_WIN_PLAYLIST], LINES - 2, 1);
-	set_menu_fore(u->content_menus[HGD_WIN_PLAYLIST], COLOR_PAIR(HGD_CPAIR_SELECTED));
-
-	if ((post_menu(u->content_menus[HGD_WIN_PLAYLIST])) != E_OK)
-		DPRINTF(HGD_D_ERROR, "Could not post menu");
-
 
 	/* refresh handler */
 	u->content_refresh_handler[HGD_WIN_PLAYLIST] = hgd_update_playlist_win;
@@ -754,34 +780,139 @@ hgd_show_dialog(struct ui *u, const char *title, const char *msg, int secs)
 }
 
 int
-hgd_ui_queue_track(struct ui *u)
+hgd_set_statusbar_text(struct ui *u, char *fmt, ...)
 {
-	WINDOW			*win;
-	int			 x, y, h, w;
+	va_list			 ap;
+	char			*buf;
 
-	hgd_calc_dialog_win_dims(&y, &x, &h, &w);
-
-	DPRINTF(HGD_D_INFO, "Queue a track");
-
-	if ((win = newwin(h, w, y, x)) == NULL) {
-		DPRINTF(HGD_D_ERROR, "Could not initialise progress window");
+	va_start(ap, fmt);
+	if (vasprintf(&buf, fmt, ap) < 0) {
+		DPRINTF(HGD_D_ERROR, "Can't allocate");
 		return (HGD_FAIL);
 	}
 
-	wattron(win, COLOR_PAIR(HGD_CPAIR_DIALOG));
-	wclear(win);
-	wbkgd(win, COLOR_PAIR(HGD_CPAIR_DIALOG));
-	box(win, '|', '-');
-
-	/* XXX progress logic here */
-
-	redrawwin(win);
-	wrefresh(win);
-
-	sleep(5);
-	delwin(win);
+	free(u->status_str);
+	u->status_str = buf;
+	hgd_refresh_statusbar(u);
 
 	return (HGD_OK);
+}
+
+/*
+ * The "standard" statusbar that the user sees 99% of the time
+ */
+int
+hgd_set_standard_statusbar_text(struct ui *u)
+{
+	return (hgd_set_statusbar_text(u,
+	    "Connected >>> %s@%s:%d   Vote: %d", user, host, port, -1));
+}
+
+
+int hgd_ui_q_callback(void *arg, float progress)
+{
+	char				 bar[COLS+1];
+	struct ui 			*u = (struct ui *) arg;
+	int				 i, fill = COLS * progress;
+
+	memset(bar, ' ', COLS);
+	bar[COLS] = '\0';
+
+	for (i = 0; i < fill; i++)
+		bar[i] = '#';
+
+	hgd_set_statusbar_text(u, "%s", bar);
+
+	return (HGD_OK);
+}
+
+int
+hgd_ui_queue_track(struct ui *u, char *filename)
+{
+	char			*full_path = NULL;
+	char			*title = "[ File Upload ]";
+	int			 ret = HGD_FAIL;
+	WINDOW			*bwin = NULL, *win = NULL, *bar = NULL;
+	int			 x, y, h, w;
+	char			*msg_centre;
+	struct hgd_ui_pbar	 pbar_struct;
+
+	DPRINTF(HGD_D_INFO, "Upload track: %s", filename);
+
+	xasprintf(&full_path, "%s/%s", u->cwd, filename);
+
+	hgd_calc_dialog_win_dims(&y, &x, &h, &w);
+	hgd_centre_dialog_text(&msg_centre, filename);
+
+	if ((bwin = newwin(h + 2, w + 2, y - 1, x - 1)) == NULL) {
+		DPRINTF(HGD_D_ERROR, "Could not initialise progress window");
+		goto clean;
+	}
+
+	if ((win = newwin(h, w, y, x)) == NULL) {
+		DPRINTF(HGD_D_ERROR, "Could not initialise progress window");
+		goto clean;
+	}
+
+#if 0
+	if ((bar = newwin(1, w - 4, y+3, x+2)) == NULL) {
+		DPRINTF(HGD_D_ERROR, "Could not initialise progress bar");
+		goto clean;
+	}
+#endif
+
+	wattron(win, COLOR_PAIR(HGD_CPAIR_DIALOG));
+	wattron(bwin, COLOR_PAIR(HGD_CPAIR_DIALOG));
+
+	wclear(win);
+	wclear(bwin);
+	//wclear(bar);
+
+	wbkgd(win, COLOR_PAIR(HGD_CPAIR_DIALOG));
+	wbkgd(bar, COLOR_PAIR(HGD_CPAIR_PBAR_BG));
+	box(bwin, '|', '-');
+
+	mvwprintw(bwin, 0, w / 2 - (strlen(title) / 2), title);
+	mvwprintw(win, 1, 0, msg_centre);
+
+	redrawwin(bwin);
+	redrawwin(win);
+	//redrawwin(bar);
+	wrefresh(bwin);
+	wrefresh(win);
+	//wrefresh(bar);
+
+	/* callback args */
+#if 0
+	pbar_struct.width = w - 4; 
+	pbar_struct.win = bar;
+#endif
+
+	hgd_cli_queue_track(full_path, u, hgd_ui_q_callback);
+
+	/* XXX */
+	//hgd_resize_app(u);
+
+	ret = HGD_OK;
+clean:
+	if (full_path)
+		free(full_path);
+
+	/* XXX work out why this flickers -- looks shit */
+	if (ret == HGD_OK) 
+		hgd_set_statusbar_text(u, "Upload of '%s' succesful", filename);
+	else
+		hgd_set_statusbar_text(u, "Upload of '%s' failed", filename);
+
+	delwin(win);
+	delwin(bwin);
+	//delwin(bar);
+
+	free(msg_centre);
+
+	hgd_refresh_ui(u);
+
+	return (ret);
 }
 
 /* uh oh, someone hit enter on the files menu! */
@@ -801,8 +932,6 @@ hgd_enter_on_files_menu(struct ui *u)
 
 	dirent = (struct dirent *) item_userptr(item);
 
-	DPRINTF(HGD_D_INFO, "dirent: %s", dirent->d_name);
-
 	switch (dirent->d_type) {
 	case DT_DIR:
 		DPRINTF(HGD_D_INFO, "switch cwd: dirent->d_name");
@@ -817,7 +946,7 @@ hgd_enter_on_files_menu(struct ui *u)
 
 		break;
 	default:
-		hgd_ui_queue_track(u);
+		hgd_ui_queue_track(u, dirent->d_name);
 		break;
 	};
 
@@ -901,7 +1030,7 @@ hgd_read_config(char **config_locations)
 }
 
 int
-hgd_show_splash(struct ui *u)
+hgd_show_about(struct ui *u)
 {
 	char			*msg;
 
@@ -915,13 +1044,79 @@ hgd_show_splash(struct ui *u)
 }
 
 int
+hgd_ui_connect(struct ui *u)
+{
+	hgd_set_statusbar_text(u, "Connecting >>> %s@%s:%d", user, host, port);
+
+	if (hgd_setup_socket() != HGD_OK) {
+		DPRINTF(HGD_D_ERROR, "Cannot setup socket");
+		hgd_show_dialog(u, "[ Error ]", "Failed to connect", 0);
+		return (HGD_FAIL);
+	}
+
+	hgd_set_statusbar_text(u,
+	    "Connected, checking server version >>> %s@%s:%d",
+	    user, host, port);
+
+	/* check protocol matches the server before we continue */
+	if (hgd_check_svr_proto() != HGD_OK) {
+		hgd_show_dialog(u, "[ Error ]", "Protocol mismatch", 0);
+		return (HGD_FAIL);
+	}
+
+	hgd_set_statusbar_text(u, "Connected, authenticating >>> %s@%s:%d",
+	    user, host, port);
+
+	if (hgd_client_login(sock_fd, ssl, user) != HGD_OK) {
+		hgd_show_dialog(u, "[ Error ]", "Authentication Failed", 0);
+		return (HGD_FAIL);
+	}
+
+	hgd_set_standard_statusbar_text(u);
+	hgd_update_playlist_win(u);
+	hgd_refresh_ui(u);
+
+	return (HGD_OK);
+}
+
+int
 main(int argc, char **argv)
 {
 	struct ui	u;
+	char			*config_path[4] = {NULL, NULL, NULL, NULL};
+	int			 num_config = 2;
 
 	hgd_debug = 3; /* XXX config file or getopt */
 
-	init_log();
+	host = xstrdup(HGD_DFL_HOST);
+#ifdef HAVE_LIBCONFIG
+	config_path[0] = NULL;
+	xasprintf(&config_path[1], "%s",  HGD_GLOBAL_CFG_DIR HGD_CLI_CFG );
+	config_path[2] = hgd_get_XDG_userprefs_location(hgdc);
+#endif
+
+	hgd_read_config(config_path + num_config);
+
+	while(num_config > 0) {
+		if (config_path[num_config] != NULL) {
+			free (config_path[num_config]);
+			config_path[num_config] = NULL;
+		}
+		num_config--;
+	}
+
+	if (init_log() != HGD_OK)
+		hgd_exit_nicely();
+
+	/* XXX proper dialog box needed */
+	if (password == NULL) {
+		password = xmalloc(HGD_MAX_PASS_SZ);
+		if (readpassphrase("Password: ", password, HGD_MAX_PASS_SZ,
+			    RPP_ECHO_OFF | RPP_REQUIRE_TTY) == NULL) {
+			DPRINTF(HGD_D_ERROR, "Can't read password");
+			hgd_exit_nicely();
+		}
+	}
 
 	initscr();
 
@@ -938,6 +1133,7 @@ main(int argc, char **argv)
 	init_pair(HGD_CPAIR_BARS, COLOR_YELLOW, COLOR_BLUE);
 	init_pair(HGD_CPAIR_SELECTED, COLOR_BLACK, COLOR_WHITE);
 	init_pair(HGD_CPAIR_DIALOG, COLOR_BLACK, COLOR_CYAN);
+	init_pair(HGD_CPAIR_PBAR_BG, COLOR_YELLOW, COLOR_BLACK);
 
 	/* initialise top and bottom bars */
 	if (hgd_init_titlebar(&u) != HGD_OK)
@@ -955,7 +1151,9 @@ main(int argc, char **argv)
 
 	/* start on the playlist */
 	hgd_switch_content(&u, HGD_WIN_PLAYLIST);
-	hgd_show_splash(&u);
+
+	if (hgd_ui_connect(&u) != HGD_OK)
+		hgd_exit_nicely();
 
 	/* main event loop */
 	DPRINTF(HGD_D_INFO, "nchgdc event loop starting");

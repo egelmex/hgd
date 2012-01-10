@@ -332,6 +332,7 @@ main(int argc, char **argv)
 {
 	char			*config_path[4] = {NULL, NULL, NULL, NULL};
 	int			 num_config = 2, ch;
+	FILE			*hgd_pid;
 
 	/* early as possible */
 	hgd_register_sig_handlers();
@@ -453,6 +454,9 @@ main(int argc, char **argv)
 	umask(~S_IRWXU);
 	hgd_mk_state_dir();
 
+	if (hgd_check_mplayer_present() != HGD_OK)
+		hgd_exit_nicely();
+
 	db = hgd_open_db(db_path, 0);
 	if (db == NULL)
 		hgd_exit_nicely();
@@ -463,6 +467,11 @@ main(int argc, char **argv)
 	if (clear_playlist_on_start) {
 		if (hgd_clear_playlist() != HGD_OK)
 			hgd_exit_nicely();
+	}
+
+	if (hgd_open_pid_file(&hgd_pid) != HGD_OK) {
+		DPRINTF(HGD_D_ERROR, "Can't open PID file");
+		return (HGD_FAIL);
 	}
 
 	/* start */
@@ -477,7 +486,7 @@ main(int argc, char **argv)
 	}
 #endif
 
-	if (hgd_write_pid_file() != HGD_OK) {
+	if (hgd_write_pid_file(&hgd_pid) != HGD_OK) {
 		DPRINTF(HGD_D_ERROR, "Can't write PID away");
 		return (HGD_FAIL);
 	}

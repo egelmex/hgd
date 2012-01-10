@@ -38,6 +38,7 @@ struct ui {
 	int			 (*content_refresh_handler[HGD_MAX_CONTENT_WINS])(struct ui *);
 	/* current directory in browser */
 	char			*cwd;
+	char			*status_str;
 };
 
 /* We have 2 handles on the UI log, read/write */
@@ -46,6 +47,13 @@ struct hgd_ui_log {
 	FILE		*wr;
 };
 
+struct hgd_ui_pbar {
+	WINDOW		*win;
+	int		 width;
+};
+
 void			hgd_update_titlebar(struct ui *u);
+int			hgd_set_standard_statusbar_text(struct ui *);
+int			hgd_set_statusbar_text(struct ui *u, char *fmt, ...);
 
 #endif /* __NCHGDC_H */

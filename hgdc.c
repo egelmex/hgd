@@ -50,33 +50,7 @@
 #include "cfg.h"
 #endif
 
-struct hgd_resp_err {
-	char		*code;
-	char		*meaning;
-};
-
-struct hgd_resp_err hgd_resp_errs[] = {
-	{ "E_INT",		"Internal error" },
-	{ "E_DENY",		"Access denied" },
-	{ "E_FLSIZE",		"File size invalid" },
-	{ "E_FLOOD",		"Flood protect triggered" },
-	{ "E_NOPLAY",		"No track is playing" },
-	{ "E_WRTRK",		"Wrong track" },
-	{ "E_DUPVOTE",		"Duplicate vote" },
-	{ "E_SSLAGN",		"Duplicate SSL negotiation" },
-	{ "E_SSLNOAVAIL",	"SSL not available" },
-	{ "E_INVCMD",		"Invalid command" },
-	{ "E_SSLREQ",		"SSL required" },
-	{ "E_SHTDWN",		"Server is going down" },
-	{ "E_KICK",		"Client misbehaving" },
-	{ "E_PERMNOCHG",	"Perms did not change" },
-	{ "E_USREXIST",		"User already exists" },
-	{ "E_USRNOEXIST",	"User does not exist" },
-	{ 0,			0 }
-};
-
 const char		*hgd_component = HGD_COMPONENT_HGDC;
-uint8_t			 hud_max_items = 0;
 
 /* protos */
 int			 hgd_check_svr_response(char *resp, uint8_t x);
@@ -135,319 +109,6 @@ hgd_exit_nicely()
 	_exit(!exit_ok);
 }
 
-/*
- * see if the server supports encryption
- * return: 1 = yes, 0 = no, -1 = error
- */
-int
-hgd_negotiate_crypto()
-{
-	int			n_toks = 0, ret = HGD_OK;
-	char			*first, *next;
-	char			*ok_tokens[2] = {"", ""};
-
-	if (crypto_pref == HGD_CRYPTO_PREF_NEVER)
-		return (0);	/* fine, no crypto then */
-
-	hgd_sock_send_line(sock_fd, NULL, "encrypt?");
-	first = next = hgd_sock_recv_line(sock_fd, NULL);
-
-	hgd_check_svr_response(next, 1);
-
-	do {
-		ok_tokens[n_toks] = strsep(&next, "|");
-		n_toks++;
-	} while ((n_toks < 2) && (next != NULL));
-
-	if (strcmp(ok_tokens[1], "tlsv1") == 0) {
-		server_ssl_capable = 1;
-		DPRINTF(HGD_D_INFO, "Server supports %s crypto", ok_tokens[1]);
-	}
-
-	if ((!server_ssl_capable) && (crypto_pref == HGD_CRYPTO_PREF_ALWAYS)) {
-		DPRINTF(HGD_D_ERROR,
-		    "User forced crypto, but server is incapable");
-		ret = HGD_FAIL;
-	}
-
-	free(first);
-
-	return (ret);
-}
-
-int
-hgd_encrypt(int fd)
-{
-	int			 ssl_res = 0;
-	char			*ok_str = NULL;
-	X509			*cert;
-
-	/* XXX For semi-implemented certificate verification - FAO mex */
-#if 0
-	X509_NAME		*cert_name;
-	EVP_PKEY		*public_key;
-	BIO			*bio;
-#endif
-	hgd_sock_send_line(fd, NULL, "encrypt");
-
-	if (hgd_setup_ssl_ctx(&method, &ctx, 0, 0, 0) != 0) {
-		return (HGD_FAIL);
-	}
-
-	DPRINTF(HGD_D_DEBUG, "Setting up SSL_new");
-	ssl = SSL_new(ctx);
-	if (ssl == NULL) {
-		PRINT_SSL_ERR (HGD_D_ERROR, "SSL_new");
-		return (HGD_FAIL);
-	}
-
-	ssl_res = SSL_set_fd(ssl, fd);
-	if (ssl_res == 0) {
-		PRINT_SSL_ERR (HGD_D_ERROR, "SSL_set_fd");
-		return (HGD_FAIL);
-	}
-
-	ssl_res = SSL_connect(ssl);
-	if (ssl_res != 1) {
-		PRINT_SSL_ERR (HGD_D_ERROR, "SSL_connect");
-		return (HGD_FAIL);
-	}
-
-	cert = SSL_get_peer_certificate(ssl);
-	if (!cert) {
-		DPRINTF(HGD_D_ERROR, "could not get remote cert");
-		exit (HGD_FAIL);
-	}
-
-/*
- * unfinished work on checking SSL certs.  Need to work out how to get the
- * hash from the cert to know where to write the cert to. XXX
- */
-#if 0
-	if(SSL_get_verify_result(ssl) != X509_V_OK)
-	{
-		PRINT_SSL_ERR ("SSL_connect");
-
-		cert = SSL_get_peer_certificate(ssl);
-
-		cert->
-		/* PEM_write_x509(fp!,cert);- */
-
-		return (-1);
-	}
-#endif
-	ok_str = hgd_sock_recv_line(fd, ssl);
-	hgd_check_svr_response(ok_str, 1);
-	free(ok_str);
-
-	DPRINTF(HGD_D_INFO, "SSL connection established");
-
-	return (HGD_OK);
-}
-
-int
-hgd_print_pretty_server_response(char *resp_line)
-{
-	char			*p;
-	struct hgd_resp_err	*resp, *chosen = NULL;
-
-	p = strchr(resp_line, '|');
-	if (p == NULL) {
-		DPRINTF(HGD_D_ERROR, "Unspecified server error reponse");
-		return (HGD_FAIL);
-	}
-
-	p++;
-	for (resp = hgd_resp_errs; resp->code != 0; resp++) {
-		if (strcmp(p, resp->code) == 0) {
-			chosen = resp;
-			break;
-		}
-	}
-
-	if (chosen == NULL) {
-		DPRINTF(HGD_D_ERROR, "Unknown server error reponse");
-		return (HGD_FAIL);
-	}
-
-	DPRINTF(HGD_D_ERROR,
-	    "Server reponded with error '%s': %s", p, chosen->meaning);
-
-	return (HGD_OK);
-}
-
-/*
- * if x == 1 you do not need to check the return value of this method as
- * hgd will have exited before this returns.
- */
-int
-hgd_check_svr_response(char *resp, uint8_t x)
-{
-	int			err = HGD_OK;
-	char			*trunc = NULL;
-
-	if (resp == NULL) {
-		DPRINTF(HGD_D_ERROR, "failed to read server response");
-		err = HGD_FAIL;
-		goto clean;
-	}
-
-	if (hgd_debug) {
-		trunc = xstrdup(resp);
-		DPRINTF(HGD_D_DEBUG, "Check reponse '%s'", trunc);
-		free(trunc);
-	}
-
-	if (strncmp(resp, "ok", 2) == 0) {
-		/* great */
-	} else if (strncmp(resp, "err", 3)) {
-		DPRINTF(HGD_D_ERROR, "Malformed server response");
-	} else {
-		/* we got an 'err' */
-		hgd_print_pretty_server_response(resp);
-		err = HGD_FAIL;
-	}
-
-clean:
-	/* frees reposonse on error and exit */
-	if ((err == HGD_FAIL) && (x)) {
-		free(resp);
-		hgd_exit_nicely();
-	}
-
-	return (err);
-}
-
-int
-hgd_client_login(int fd, SSL *ssl, char *username)
-{
-	char			*resp, *user_cmd, pass[HGD_MAX_PASS_SZ];
-	int			 login_ok = -1;
-	char			*prompt;
-
-	if (password == NULL) {
-		xasprintf(&prompt, "Password for %s@%s: ", user, host);
-		if (readpassphrase(prompt, pass, HGD_MAX_PASS_SZ,
-		    RPP_ECHO_OFF | RPP_REQUIRE_TTY) == NULL) {
-			DPRINTF(HGD_D_ERROR, "Problem reading password from user");
-			memset(pass, 0, HGD_MAX_PASS_SZ);
-			free(prompt);
-			return (HGD_FAIL);
-		}
-		free(prompt);
-	} else {
-		strncpy(pass, password, HGD_MAX_PASS_SZ);
-		if (HGD_MAX_PASS_SZ > 0)
-			pass[HGD_MAX_PASS_SZ-1] = '\0';
-	}
-
-	/* send password */
-	xasprintf(&user_cmd, "user|%s|%s", username, pass);
-	hgd_sock_send_line(fd, ssl, user_cmd);
-	memset(pass, 0, HGD_MAX_PASS_SZ);
-	free(user_cmd);
-
-	resp = hgd_sock_recv_line(fd, ssl);
-	login_ok = hgd_check_svr_response(resp, 0);
-
-	free(resp);
-
-	if (login_ok == HGD_OK) {
-		authenticated = 1;
-		DPRINTF(HGD_D_DEBUG, "Identified as %s", user);
-	} else
-		DPRINTF(HGD_D_WARN, "Login as %s failed", user);
-
-	return (login_ok);
-}
-
-int
-hgd_setup_socket()
-{
-	struct sockaddr_in	addr;
-	char*			resp;
-	struct hostent		*he;
-	int			sockopt = 1, ret = HGD_OK;
-
-	DPRINTF(HGD_D_DEBUG, "Connecting to %s", host);
-
-	/* if they gave a hostname, we look up the IP */
-	if (!hgd_is_ip_addr(host)) {
-		DPRINTF(HGD_D_DEBUG, "Looking up host '%s'", host);
-		he = gethostbyname(host);
-		if (he == NULL) {
-			DPRINTF(HGD_D_ERROR,
-			    "Failure in hostname resolution: '%s'", host);
-			ret = HGD_FAIL;
-			goto clean;
-		}
-
-		free(host);
-		host = xstrdup(
-		    inet_ntoa( *(struct in_addr*)(he->h_addr_list[0])));
-		DPRINTF(HGD_D_DEBUG, "Found IP %s", host);
-	}
-
-	DPRINTF(HGD_D_DEBUG, "Connecting to IP %s:%d", host, port);
-
-	/* set up socket address */
-	memset(&addr, 0, sizeof(struct sockaddr_in));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr(host);
-	addr.sin_port = htons(port);
-
-	sock_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock_fd < 0) {
-		DPRINTF(HGD_D_ERROR, "can't make socket: %s", SERROR);
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR,
-		    &sockopt, sizeof(sockopt)) < 0) {
-		DPRINTF(HGD_D_WARN, "Can't set SO_REUSEADDR");
-	}
-
-	if (connect(sock_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-		close(sock_fd);
-		DPRINTF(HGD_D_ERROR, "Can't connect to %s", host);
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	/* expect a hello message */
-	resp = hgd_sock_recv_line(sock_fd, ssl);
-	hgd_check_svr_response(resp, 1);
-	free(resp);
-
-	DPRINTF(HGD_D_DEBUG, "Connected to %s", host);
-
-	/* identify ourselves */
-	if (user == NULL) {
-		/* If the user did not set their name use thier system login */
-		user = getenv("USER");
-	}
-	if (user == NULL) {
-		DPRINTF(HGD_D_ERROR, "can't get username");
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	hgd_negotiate_crypto();
-	if ((server_ssl_capable) && (crypto_pref != HGD_CRYPTO_PREF_NEVER)) {
-		if (hgd_encrypt(sock_fd) != HGD_OK) {
-			ret = HGD_FAIL;
-			goto clean;
-		}
-	}
-
-	/* annoying error message for those too lazy to set up crypto */
-	if (ssl == NULL)
-		DPRINTF(HGD_D_WARN, "Connection is not encrypted");
-
-clean:
-	return (ret);
-}
 
 void
 hgd_usage()
@@ -489,131 +150,69 @@ hgd_usage()
 	printf("    -v\t\t\tShow version and exit\n");
 }
 
-int
-hgd_queue_track(char *filename)
+#define HGD_PROG_BAR_WIDTH	33
+#define HGD_PROG_FILE_WIDTH	"40"
+void
+hgd_print_progress(char *filename, float progress)
 {
-	FILE			*f;
-	struct stat		st;
-	ssize_t			written = 0, fsize, chunk_sz;
-	char			chunk[HGD_BINARY_CHUNK];
-	char			*q_req = 0, *resp1 = 0, *resp2 = 0;
-	char			 stars_buf[81], *trunc_filename = 0;
-	int			 iters = 0, barspace, percent, ret = HGD_FAIL;
-	float			 n_stars;
+	char			*trunc_filename = NULL;
+	char			 bar[HGD_PROG_BAR_WIDTH + 1];
+	int			 upto = HGD_PROG_BAR_WIDTH * progress;
+	int			 i;
+	char			*p;
 
-	/* maximum length of filename in progress bar */
+	if (progress < 1) {
+		/* fill in progress bar */
+		memset(bar, ' ', HGD_PROG_BAR_WIDTH);
+		bar[HGD_PROG_BAR_WIDTH] = '\0';
+		for (i = 0, p = bar; i < upto; i++)
+			*p++ = '*';
+
+		bar[0] = '|';
+		bar[HGD_PROG_BAR_WIDTH - 1] = '|';
+		hgd_set_line_colour(ANSI_YELLOW);
+
+	} else {
+		memset(bar, '*', HGD_PROG_BAR_WIDTH);
+		bar[HGD_PROG_BAR_WIDTH] = '\0';
+
+		bar[0] = '|';
+		bar[HGD_PROG_BAR_WIDTH - 1] = '|';
+		hgd_set_line_colour(ANSI_GREEN);
+	}
+
 	trunc_filename = xstrdup(basename(filename));
 	hgd_truncate_string(trunc_filename, 40);
 
-	DPRINTF(HGD_D_INFO, "Uploading file '%s'", filename);
+	printf("\r%s %-" HGD_PROG_FILE_WIDTH "s %3d%%",
+	    bar, trunc_filename, (int) (progress * 100));
+	free(trunc_filename);
 
-	if (stat(filename, &st) < 0) {
-		DPRINTF(HGD_D_ERROR, "Can't stat '%s'", filename);
-		ret = HGD_FAIL;
-		goto clean;
-	}
+	/* reset colours */
+	hgd_set_line_colour(ANSI_WHITE);
+}
 
-	if (st.st_mode & S_IFDIR) {
-		DPRINTF(HGD_D_ERROR, "Can't upload directories");
-		ret = HGD_FAIL;
-		goto clean;
-	}
+int
+hgd_queue_track_cb(void *arg, float progress)
+{
+	char			*filename = (char *) arg;
 
-	fsize = st.st_size;
+	hgd_print_progress(filename, progress);
 
-	/* send request to upload */
-	xasprintf(&q_req, "q|%s|%d", filename, fsize);
-	hgd_sock_send_line(sock_fd, ssl, q_req);
+	return (HGD_OK);
+}
 
-	/* check we are allowed */
-	resp1 = hgd_sock_recv_line(sock_fd, ssl);
-	if (hgd_check_svr_response(resp1, 0) == HGD_FAIL)
-		goto clean;
+int
+hgd_queue_track(char *filename)
+{
+	if (hgd_cli_queue_track(filename, filename, hgd_queue_track_cb)
+	    != HGD_OK)
+		return (HGD_FAIL);
 
-	DPRINTF(HGD_D_DEBUG, "opening '%s' for reading", filename);
-	f = fopen(filename, "r");
-	if (f == NULL) {
-		DPRINTF(HGD_D_ERROR, "fopen %s: %s", filename, SERROR);
-		ret = HGD_FAIL;
-		goto clean;
-	}
+	hgd_print_progress(filename, 1);
+	printf("\n");
 
-	/* prepare progress bar */
-	barspace =  (float) (HGD_TERM_WIDTH - strlen(
-	    basename(trunc_filename)) - 2) - 7;
-	memset(stars_buf, ' ', HGD_TERM_WIDTH);
-	stars_buf[HGD_TERM_WIDTH] = 0;
-
-	/*
-	 * start sending the file
-	 */
-	written = 0;
-	while (written != fsize) {
-
-		/* update progress bar */
-		if ((iters % 50 == 0) && (hgd_debug <= 1)) {
-			percent = (float) written/fsize * 100;
-			n_stars = barspace * ((float) written/fsize) + 1;
-			memset(stars_buf, '*', n_stars);
-
-			/* progress bar caps */
-			stars_buf[0] = '|';
-			stars_buf[barspace - 1] = '|';
-			stars_buf[barspace] = 0;
-
-			printf("\r%s: %s %3d%%",
-			    trunc_filename, stars_buf, percent);
-			fflush(stdout);
-		}
-		iters++;
-
-		if (fsize - written < HGD_BINARY_CHUNK)
-			chunk_sz = fsize - written;
-		else
-			chunk_sz = HGD_BINARY_CHUNK;
-
-		if (fread(chunk, chunk_sz, 1, f) != 1) {
-			DPRINTF(HGD_D_WARN, "Retrying fread");
-			continue;
-		}
-
-		hgd_sock_send_bin(sock_fd, ssl, chunk, chunk_sz);
-
-		written += chunk_sz;
-		DPRINTF(HGD_D_DEBUG, "Progress %d/%d bytes",
-		    (int)  written, (int) fsize);
-	}
-
-	if (hgd_debug <= 1) {
-		memset(stars_buf, ' ', HGD_TERM_WIDTH);
-
-		hgd_set_line_colour(ANSI_GREEN);
-		printf("\r%s\r%s: OK\n", stars_buf, basename(trunc_filename));
-		hgd_set_line_colour(ANSI_WHITE);
-	}
-
-	fclose(f);
-
-	resp2 = hgd_sock_recv_line(sock_fd, ssl);
-	if (hgd_check_svr_response(resp2, 0) == HGD_FAIL) {
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	DPRINTF(HGD_D_INFO, "Transfer complete");
-
-	ret = HGD_OK;
-clean:
-	if (trunc_filename)
-		free(trunc_filename);
-	if (resp1)
-		free(resp1);
-	if (resp2)
-		free(resp2);
-	if (q_req)
-		free(q_req);
-
-	return (ret);
+	return (HGD_OK);
 }
 
 /* upload and queue a file to the playlist */
@@ -638,124 +237,107 @@ hgd_req_queue(int n_args, char **args)
 	return (ret);
 }
 
-#define HGD_NUM_TRACK_FIELDS		14
 int
-hgd_print_track(char *resp, uint8_t first)
+hgd_print_track(struct hgd_playlist_item *it, uint8_t first)
 {
-	int			n_toks = 0, i, ret = HGD_OK;
-	char			*tokens[HGD_NUM_TRACK_FIELDS];
+	int			 ret = HGD_OK;
 
-	do {
-		tokens[n_toks] = xstrdup(strsep(&resp, "|"));
-	} while ((n_toks++ < HGD_NUM_TRACK_FIELDS) && (resp != NULL));
+	if (first)
+		hgd_set_line_colour(ANSI_GREEN);
+	else
+		hgd_set_line_colour(ANSI_RED);
 
-	if (n_toks == HGD_NUM_TRACK_FIELDS) {
+	printf(" [ #%04d queued by '%s' ]\n", it->id, it->user);
 
-		if (first)
-			hgd_set_line_colour(ANSI_GREEN);
-		else
-			hgd_set_line_colour(ANSI_RED);
+	printf("   Filename: '%s'\n",
+	    hgd_truncate_string(it->filename,
+	    HGD_TERM_WIDTH - strlen("   Filename: ''")));
 
-		printf(" [ #%04d queued by '%s' ]\n",
-		    atoi(tokens[0]), tokens[4]);
-
-		printf("   Filename: '%s'\n",
-		    hgd_truncate_string(tokens[1],
-		    HGD_TERM_WIDTH - strlen("   Filename: ''")));
-
-		printf("   Artist:   ");
-		if (strcmp(tokens[2], "") != 0)
-			printf("'%s'\n", hgd_truncate_string(tokens[2],
+	printf("   Artist:   ");
+	if (strcmp(it->tags.artist, "") != 0)
+		printf("'%s'\n", hgd_truncate_string(it->tags.artist,
 			    HGD_TERM_WIDTH - strlen("   Artist:   ''")));
-		else
-			printf("<unknown>\n");
+	else
+		printf("<unknown>\n");
 
-		printf("   Title:    ");
-		if (strcmp(tokens[3], "") != 0)
-			printf("'%s'\n",
-			    hgd_truncate_string(tokens[3],
-			    HGD_TERM_WIDTH - strlen("   Title:    ''")));
-		else
-			printf("<unknown>\n");
+	printf("   Title:    ");
+	if (strcmp(it->tags.title, "") != 0)
+		printf("'%s'\n",
+		    hgd_truncate_string(it->tags.title,
+		    HGD_TERM_WIDTH - strlen("   Title:    ''")));
+	else
+		printf("<unknown>\n");
 
-		/* thats it for compact entries */
-		if (!first)
-			goto skip_full;
 
-		printf("   Album:    ");
-		if (strcmp(tokens[5], "") != 0)
-			printf("'%s'\n", hgd_truncate_string(tokens[5],
-			    HGD_TERM_WIDTH - strlen("   Album:    ''")));
-		else
-			printf("<unknown>\n");
+	/* thats it for compact entries */
+	if (!first)
+		goto skip_full;
 
-		printf("   Genre:    ");
-		if (strcmp(tokens[6], "") != 0)
-			printf("'%s'\n", hgd_truncate_string(tokens[6],
+	printf("   Album:    ");
+	if (strcmp(it->tags.album, "") != 0)
+		printf("'%s'\n", hgd_truncate_string(it->tags.album,
+		    HGD_TERM_WIDTH - strlen("   Album:    ''")));
+	else
+		printf("<unknown>\n");
+
+	printf("   Genre:    ");
+	if (strcmp(it->tags.genre, "") != 0)
+		printf("'%s'\n", hgd_truncate_string(it->tags.genre,
 			    HGD_TERM_WIDTH - strlen("   Genre:    ''")));
-		else
-			printf("<unknown>\n");
+	else
+		printf("<unknown>\n");
 
-		printf("   Year:     ");
-		if (strcmp(tokens[11], "0") != 0)
-			printf("'%s'\n", hgd_truncate_string(tokens[11],
-			    HGD_TERM_WIDTH - strlen("   Year:     ''")));
-		else
-			printf("<unknown>\n");
+	printf("   Year:     ");
+	if (it->tags.year != 0)
+		printf("%d\n", it->tags.year);
+	else
+		printf("<unknown>\n");
 
-		/* audio properties all on one line */
-		printf("   Audio:    ");
+	/* audio properties all on one line */
+	printf("   Audio:    ");
 
-		if (atoi(tokens[7]) != 0)
-			printf("%4ss", tokens[7]);
-		else
-			printf("%4ss", "????");
+	if (it->tags.duration != 0)
+		printf("%4ds", it->tags.duration);
+	else
+		printf("%4ss", "????");
 
-		if (atoi(tokens[9]) != 0)
-			printf("   %5shz", tokens[9]);
-		else
-			printf("   %5shz", "?");
+	if (it->tags.samplerate != 0)
+		printf("   %5dhz", it->tags.samplerate);
+	else
+		printf("   %5shz", "?");
 
-		if (atoi(tokens[8]) != 0)
-			printf("   %3skbps", tokens[8]);
-		else
-			printf("   %3skbps", "?");
+	if (it->tags.bitrate != 0)
+		printf("   %3dkbps", it->tags.bitrate);
+	else
+		printf("   %3skbps", "?");
 
-		if (atoi(tokens[10]) != 0)
-			printf("   %s channels\n", tokens[10]);
-		else
-			printf("   %s channels\n", "?");
+	if (it->tags.channels != 0)
+		printf("   %d channels\n", it->tags.channels);
+	else
+		printf("   %s channels\n", "?");
 
-		/* vote off info */
-		printf("   Votes needed to skip:    %s\n",
-		    atoi(tokens[12]) == 0 ? "none" : tokens[12]);
+	/* vote off info */
+	printf("   Votes needed to skip:    %d\n", it->votes_needed);
 
-		switch (atoi(tokens[13])) {
-		case 0:
-			printf("   You may vote off this track.\n");
-			break;
-		case 1:
-			hgd_set_line_colour(ANSI_CYAN);
-			printf("   You HAVE voted-off this track.\n");
-			break;
-		case -1:
-			printf("   Could not auhtenticate. "
-			    "Log in to enable vote-off functionality.\n");
-			break;
-		default:
-			DPRINTF(HGD_D_ERROR, "Bogus 'has_voted' field");
-			ret = HGD_FAIL;
-		};
-skip_full:
-		hgd_set_line_colour(ANSI_WHITE);
-
-	} else {
-		DPRINTF(HGD_D_ERROR, "Wrong number of tokens from server");
+	switch (it->has_voted) {
+	case 0:
+		printf("   You may vote off this track.\n");
+		break;
+	case 1:
+		hgd_set_line_colour(ANSI_CYAN);
+		printf("   You HAVE voted-off this track.\n");
+		break;
+	case -1:
+		printf("   Could not auhtenticate. "
+		    "Log in to enable vote-off functionality.\n");
+		break;
+	default:
+		DPRINTF(HGD_D_ERROR, "Bogus 'has_voted' field");
 		ret = HGD_FAIL;
-	}
+	};
 
-	for (i = 0; i < n_toks; i ++)
-		free(tokens[i]);
+skip_full:
+	hgd_set_line_colour(ANSI_WHITE);
 
 	return (ret);
 }
@@ -794,8 +376,8 @@ hgd_req_vote_off(int n_args, char **args)
 int
 hgd_req_playlist(int n_args, char **args)
 {
-	char			*resp, *track_resp, *p;
-	int			n_items, i;
+	struct hgd_playlist		*list;
+	int				 i = 0;
 
 	(void) args;
 	(void) n_args;
@@ -807,39 +389,27 @@ hgd_req_playlist(int n_args, char **args)
 	if (!authenticated)
 		hgd_client_login(sock_fd, ssl, user);
 
-	hgd_sock_send_line(sock_fd, ssl, "ls");
-	resp = hgd_sock_recv_line(sock_fd, ssl);
-	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
-		free(resp);
+	if (hgd_cli_get_playlist(&list) != HGD_OK)
 		return (HGD_FAIL);
-	}
 
-	for (p = resp; (*p != 0 && *p != '|'); p ++);
-	if (*p != '|') {
-		DPRINTF(HGD_D_ERROR, "didn't find a argument separator");
-		free(resp);
-		return (HGD_FAIL);
-	}
+	if (list->n_items == 0) {
+		printf("Playlist empty.\n");
+	} else {
+		for (i = 0; i < list->n_items; i++) {
 
-	n_items = atoi(++p);
-	free(resp);
+			if ((max_playlist_items != 0) &&
+			    (i >= max_playlist_items))
+				break;
 
-	DPRINTF(HGD_D_DEBUG, "expecting %d items in playlist", n_items);
-	for (i = 0; i < n_items; i++) {
-		track_resp = hgd_sock_recv_line(sock_fd, ssl);
-
-		if (hud_max_items == 0 || hud_max_items > i) {
 			hgd_hline();
-			hgd_print_track(track_resp, i == 0);
+			hgd_print_track(list->items[i], i == 0);
 		}
-
-		free(track_resp);
 	}
 
-	if (n_items)
-		hgd_hline();
-	else
-		printf("Nothing to play!\n");
+	hgd_hline();
+
+	hgd_free_playlist(list);
+	free(list);
 
 	return (HGD_OK);
 }
@@ -1092,8 +662,9 @@ hgd_req_user_noadmin(int n_args, char **args)
 int
 hgd_req_np(int n_args, char **args)
 {
-	char			*resp = NULL, *p;
-	int			 ret = HGD_FAIL;
+	char				*resp = NULL, *p;
+	int			 	 ret = HGD_FAIL;
+	struct hgd_playlist_item 	*it = NULL;
 
 	(void) n_args;
 	(void) args;
@@ -1127,13 +698,24 @@ hgd_req_np(int n_args, char **args)
 			DPRINTF(HGD_D_ERROR, "Failed to find separator2");
 			goto fail;
 		}
-		hgd_print_track(p + 1, 1);
+
+		it = xmalloc(sizeof(*it));
+		if (hgd_cli_populate_track(&it, p + 1) != HGD_OK) {
+			ret = HGD_FAIL;
+			goto fail;
+		}
+		hgd_print_track(it, 1);
 	}
 
 	ret = HGD_OK;
 fail:
 	if (resp)
 		free(resp);
+
+	if (it) {
+		hgd_free_playlist_item(it);
+		free(it);
+	}
 
 	return (ret);
 }
@@ -1204,72 +786,6 @@ struct hgd_req_despatch req_desps[] = {
 	{NULL,		0,	0,		NULL,			0} /* end */
 };
 
-/*
- * check protocol version is correct
- */
-int
-hgd_check_svr_proto()
-{
-	char			*v, *resp = NULL;
-	int			 major = -1, minor = -1, ret = HGD_OK;
-	char			*split = "|";
-	char			*saveptr1;
-
-	hgd_sock_send_line(sock_fd, ssl, "proto");
-	resp = hgd_sock_recv_line(sock_fd, ssl);
-
-	if (hgd_check_svr_response(resp, 0) != HGD_OK) {
-		DPRINTF(HGD_D_ERROR, "Could not check server proto version");
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	v = strtok_r(resp, split, &saveptr1);
-	(void) v;
-
-	/* major */
-	v = strtok_r(NULL, split, &saveptr1);
-	if (v == NULL) {
-		DPRINTF(HGD_D_ERROR, "Could not find protocol MAJOR version");
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	major = atoi(v);
-
-	/* minor */
-	v = strtok_r(NULL, split, &saveptr1);
-	if (v == NULL) {
-		DPRINTF(HGD_D_ERROR, "Could not find protocol MINOR version");
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-	minor = atoi(v);
-
-	if (major == HGD_PROTO_VERSION_MAJOR && minor >= HGD_PROTO_VERSION_MINOR) {
-		if (minor > HGD_PROTO_VERSION_MINOR) {
-			DPRINTF(HGD_D_INFO, "Server is running a newer minor version"
-			    "of the server.Server=%d,%d, Client=%d,%d", major, minor,
-			    HGD_PROTO_VERSION_MAJOR, HGD_PROTO_VERSION_MINOR);
-		}
-	} else {
-		DPRINTF(HGD_D_ERROR, "Protocol mismatch: "
-		    "Server=%d,%d, Client=%d,%d", major, minor,
-		    HGD_PROTO_VERSION_MAJOR, HGD_PROTO_VERSION_MINOR);
-		ret = HGD_FAIL;
-		goto clean;
-	}
-
-
-	DPRINTF(HGD_D_DEBUG, "Protocol version matches server");
-
-clean:
-	if (resp)
-		free(resp);
-
-	return (ret);
-}
 
 /* parse command line args */
 int
@@ -1351,7 +867,7 @@ hgd_read_config(char **config_locations)
 
 	hgd_cfg_c_colours(cf, &colours_on);
 	hgd_cfg_crypto(cf, "hgdc", &crypto_pref);
-	hgd_cfg_c_maxitems(cf, &hud_max_items);
+	hgd_cfg_c_maxitems(cf, &max_playlist_items);
 	hgd_cfg_c_hostname(cf, &host);
 	hgd_cfg_c_port(cf, &port);
 	hgd_cfg_c_password(cf, &password, *config_locations);
@@ -1447,9 +963,9 @@ main(int argc, char **argv)
 			crypto_pref = HGD_CRYPTO_PREF_NEVER;
 			break;
 		case 'm':
-			hud_max_items = atoi(optarg);
+			max_playlist_items = atoi(optarg);
 			DPRINTF(HGD_D_DEBUG, "Set max playlist items to %d",
-			    hud_max_items);
+			    max_playlist_items);
 			break;
 		case 's':
 			DPRINTF(HGD_D_DEBUG, "Set server to %s", optarg);
