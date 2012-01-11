@@ -102,6 +102,8 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <event2/buffer.h>
+#include <event2/bufferevent.h>
 
 extern int8_t			  hgd_debug;
 extern uint8_t			  dying;
@@ -167,12 +169,21 @@ struct hgd_session {
 };
 
 typedef struct {
+	int			 fd;
+	char			*filename;
+	/*char			*unique_filename;*/
+	int			 bytes_left;
+} binary_t;
+
+typedef struct {
 	struct evbuffer		*in;
 	struct evbuffer		*out;
 	int			 num_bad_commands;
 	char			*cli_str;
 	struct hgd_user		*user;
 	int			 is_ssl;
+	binary_t		*binary_mode;
+	int			 closing;
 } con_t;
 
 struct hgd_admin_cmd {

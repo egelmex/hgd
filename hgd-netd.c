@@ -97,6 +97,7 @@ hgd_exit_nicely()
 			    "Can't shutdown socket: %s", SERROR);
 		close(svr_fd);
 	}
+
 	if (db_path)
 		free(db_path);
 	if (filestore_path)

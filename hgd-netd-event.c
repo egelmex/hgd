@@ -1,3 +1,21 @@
+/*
+ * Copyright (c) 2011, Edd Barrett <vext01@gmail.com>
+ * Copyright (c) 2011, Martin Ellis <ellism88@gmail.com>
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+/* vim: set fdm=syntax */
 #include <stdlib.h>
 
 #include <event2/event.h>
@@ -48,22 +66,117 @@
 
 #define PORT_NO (6633)
 
-
+#define OUT(x...)					\
+	do {						\
+		evbuffer_add_printf(con->out, x);	\
+		evbuffer_add_printf(con->out, "\r\n");	\
+	} while (0)
 
 struct netd_settings {
-	int		 crypto_pref;
-	int		 req_votes;
-	sqlite3		*db;
+	int			 crypto_pref;
+	int			 req_votes;
+	int			 flood_limit;
+	int			 max_upload_size;
+	sqlite3			*db;
+	struct event_base	*eb;
+	char			*filestore_path;
+	char			*vote_sound;
 };
 
-struct netd_settings settings = {HGD_CRYPTO_PREF_IF_POSS, 2, NULL};
+struct netd_settings settings = {HGD_CRYPTO_PREF_IF_POSS,
+					2, 100, 1000000, NULL, NULL,
+					NULL, NULL};
 
 const char			*hgd_component = HGD_COMPONENT_HGD_NETD;
+
+int
+hgd_get_tag_metadata(char *filename, struct hgd_media_tag *meta)
+{
+#ifdef HAVE_TAGLIB
+	TagLib_File			*file;
+	TagLib_Tag			*tag;
+	const TagLib_AudioProperties	*ap;
+#endif
+
+	DPRINTF(HGD_D_DEBUG, "Attempting to read tags for '%s'", filename);
+
+	meta->artist = xstrdup("");
+	meta->title = xstrdup("");
+	meta->album = xstrdup("");
+	meta->genre = xstrdup("");
+	meta->year = 0;
+	meta->duration = 0;
+	meta->samplerate = 0;
+	meta->channels = 0;
+	meta->bitrate = 0;
+
+#ifdef HAVE_TAGLIB
+	file = taglib_file_new(filename);
+	if (file == NULL) {
+		DPRINTF(HGD_D_DEBUG, "taglib could not open '%s'", filename);
+		return (HGD_FAIL);
+	}
+
+	if (!taglib_file_is_valid(file)) {
+		DPRINTF(HGD_D_WARN, "invalid tag in '%s'", filename);
+		return (HGD_FAIL);
+	}
+
+	tag = taglib_file_tag(file);
+	if (tag == NULL) {
+		DPRINTF(HGD_D_WARN, "failed to get tag of '%s'", filename);
+		return (HGD_FAIL);
+	}
+
+	free(meta->artist);
+	free(meta->title);
+	free(meta->album);
+	free(meta->genre);
+
+	meta->artist = xstrdup(taglib_tag_artist(tag));
+	meta->title = xstrdup(taglib_tag_title(tag));
+	meta->album = xstrdup(taglib_tag_album(tag));
+	meta->genre = xstrdup(taglib_tag_genre(tag));
+
+	meta->year = taglib_tag_year(tag);
+
+	/* now audio properties: i dont consider this failing fatal */
+	ap = taglib_file_audioproperties(file);
+	if (ap != NULL) {
+		meta->duration = taglib_audioproperties_length(ap);
+		meta->samplerate = taglib_audioproperties_samplerate(ap);
+		meta->channels = taglib_audioproperties_channels(ap);
+		meta->bitrate = taglib_audioproperties_bitrate(ap);
+	} else {
+		DPRINTF(HGD_D_WARN,
+		    "failed to get audio properties: %s", filename);
+	}
+
+	DPRINTF(HGD_D_INFO,
+	    "Got tag from '%s': '%s' by '%s' from the album '%s' from the year"
+	    "'%u' of genre '%s' [%d secs, %d chans, %d Hz, %d bps]\n",
+	    filename, meta->title, meta->artist, meta->album, meta->year,
+	    meta->genre, meta->duration, meta->channels, meta->samplerate,
+	    meta->bitrate);
+	taglib_file_free(file);
+	taglib_tag_free_strings();
+#else
+	DPRINTF(HGD_D_DEBUG, "No taglib support, skipping tag retrieval");
+#endif
+
+	return (HGD_OK);
+}
+
 
 void
 hgd_exit_nicely()
 {
 	DPRINTF(HGD_D_ERROR, "TODO:");
+}
+
+void cb(struct bufferevent *bev, short events, void *ptr)
+{
+	puts("TODO:\n");
 }
 
 static void DPRINTF_cb(int severity, const char *msg)
@@ -98,7 +211,7 @@ hgd_cmd_id(con_t *con, char **args)
 
 	xasprintf(&resp, "ok|%s|%u|%d", con->user->name, con->user->perms, vote);
 
-	evbuffer_add_printf(con->out,  "%s", resp);
+	OUT("%s\r\n", resp);
 
 	free(resp);
 
@@ -125,17 +238,17 @@ hgd_cmd_now_playing(con_t *con, char **args)
 
 	memset(&playing, 0, sizeof(playing));
 	if (hgd_get_playing_item(settings.db, &playing) == HGD_FAIL) {
-		evbuffer_add_printf(con->out, "err|" HGD_RESP_E_INT);
+		OUT( "err|" HGD_RESP_E_INT "\r\n");
 		hgd_free_playlist_item(&playing);
 		return (HGD_FAIL);
 	}
 
 	if (playing.filename == NULL) {
-		evbuffer_add_printf(con->out, "ok|0");
+		OUT( "ok|0");
 	} else {
 		if ((hgd_get_num_votes(settings.db, &num_votes)) != HGD_OK) {
 			DPRINTF(HGD_D_ERROR, "can't get votes");
-			evbuffer_add_printf(con->out, "err|" HGD_RESP_E_INT);
+			OUT( "err|" HGD_RESP_E_INT);
 			return (HGD_FAIL);
 		}
 
@@ -144,7 +257,7 @@ hgd_cmd_now_playing(con_t *con, char **args)
 			    con->user->name, &voted) != HGD_OK) {
 				DPRINTF(HGD_D_WARN, "cant decide if voted: %s",
 				    con->user->name);
-				evbuffer_add_printf(con->out, "err|" HGD_RESP_E_INT);
+				OUT( "err|" HGD_RESP_E_INT);
 				return (HGD_FAIL);
 			}
 		} else
@@ -159,7 +272,7 @@ hgd_cmd_now_playing(con_t *con, char **args)
 		    playing.tags.samplerate, playing.tags.channels,
 		    playing.tags.year, (settings.req_votes - num_votes),
 		    voted);
-		evbuffer_add_printf(con->out, "%s", reply);
+		OUT( "%s", reply);
 
 		free(reply);
 	}
@@ -178,7 +291,7 @@ hgd_cmd_proto(con_t *con, char **unused)
 
 	xasprintf(&reply, "ok|%d|%d", HGD_PROTO_VERSION_MAJOR,
 	    HGD_PROTO_VERSION_MINOR);
-	evbuffer_add_printf(con->out, "%s", reply);
+	OUT( "%s", reply);
 	free(reply);
 
 	return (HGD_OK);
@@ -198,18 +311,18 @@ hgd_cmd_playlist(con_t *con, char **args)
 	(void) args;
 
 	if (hgd_get_playlist(settings.db, &list) == HGD_FAIL) {
-		evbuffer_add_printf(con->out, "err|" HGD_RESP_E_INT);
+		OUT( "err|" HGD_RESP_E_INT);
 		return (HGD_FAIL);
 	}
 
 	/* and respond to client */
 	xasprintf(&resp, "ok|%d", list.n_items);
-	evbuffer_add_printf(con->out, "%s", resp);
+	OUT( "%s", resp);
 	free(resp);
 
 	if ((hgd_get_num_votes(settings.db, &num_votes)) != HGD_OK) {
 		DPRINTF(HGD_D_ERROR, "can't get votes");
-		evbuffer_add_printf(con->out, "err|" HGD_RESP_E_INT);
+		OUT( "err|" HGD_RESP_E_INT);
 		return (HGD_FAIL);
 	}
 
@@ -217,7 +330,7 @@ hgd_cmd_playlist(con_t *con, char **args)
 		if (hgd_user_has_voted(settings.db, con->user->name, &voted) != HGD_OK) {
 			DPRINTF(HGD_D_WARN, "problem determining if voted: %s",
 			    con->user->name);
-			evbuffer_add_printf(con->out, "err|" HGD_RESP_E_INT);
+			OUT( "err|" HGD_RESP_E_INT);
 			return (HGD_FAIL);
 		}
 	}
@@ -242,7 +355,7 @@ hgd_cmd_playlist(con_t *con, char **args)
 		    (i == 0 ? (settings.req_votes - num_votes) : settings.req_votes),
 		    (i == 0 ? voted : 0)
 		);
-		evbuffer_add_printf(con->out,"%s", resp);
+		OUT("%s", resp);
 		DPRINTF(HGD_D_DEBUG, "%s\n", resp);
 		free(resp);
 	}
@@ -250,6 +363,419 @@ hgd_cmd_playlist(con_t *con, char **args)
 	hgd_free_playlist(&list);
 
 	return (HGD_OK);
+}
+
+int
+hgd_cmd_user_list(con_t *con, char **args)
+{
+	struct hgd_user_list	*list;
+	int			 i, ret = HGD_FAIL;
+	char			*msg, *msg1 = NULL;
+
+	/* TODO: look at NULL */
+	if (hgd_user_list(settings.db, NULL, &list) != HGD_OK) {
+		OUT( "err|" HGD_RESP_E_INT);
+		goto clean;
+	}
+
+	xasprintf(&msg, "ok|%d", list->n_users);
+	OUT( "%s", msg);
+	free(msg);
+
+	for (i = 0; i < list->n_users; i++) {
+		xasprintf(&msg1, "%s|%d",
+		    list->users[i]->name, list->users[i]->perms);
+		OUT( "%s", msg1);
+		free(msg1);
+	}
+
+	ret = HGD_OK;
+clean:
+	if (list != NULL) {
+		hgd_free_user_list(list);
+		free(list);
+	}
+
+	return (ret);
+}
+
+int
+hgd_cmd_pause(con_t *con, char **unused)
+{
+	int ret;
+
+	(void) unused;
+
+	ret = hgd_pause_track();
+
+	if (ret == HGD_OK)
+		OUT( "ok");
+	else if (ret == HGD_FAIL_NOPLAY)
+		OUT( "err|" HGD_RESP_E_NOPLAY);
+	else
+		OUT( "err|" HGD_RESP_E_DENY);
+
+	return (ret);
+}
+
+int
+hgd_cmd_skip(con_t *con, char **unused)
+{
+	int			ret;
+
+	(void) unused;
+
+	ret = hgd_skip_track();
+
+	switch (ret) {
+	case HGD_FAIL_NOPLAY:
+		OUT( "err|" HGD_RESP_E_NOPLAY);
+		break;
+	case HGD_OK:
+		OUT( "ok");
+		break;
+	default:
+		OUT( "err|" HGD_RESP_E_INT);
+		break;
+	};
+
+	return (ret);
+}
+
+int
+hgd_cmd_user_mkadmin(con_t *con, char **args)
+{
+	int		ret = HGD_FAIL;
+
+	switch(hgd_user_mod_perms(settings.db, NULL, args[0], HGD_AUTH_ADMIN, 1)) {
+	case HGD_OK:
+		OUT( "ok");
+		ret = HGD_OK;
+		break;
+	case HGD_FAIL_USRNOEXIST:
+		    OUT( "err|" HGD_RESP_E_USRNOEXIST);
+		break;
+	case HGD_FAIL_PERMNOCHG:
+		OUT( "err|" HGD_RESP_E_PERMNOCHG);
+		break;
+	default:
+		OUT( "err|" HGD_RESP_E_INT);
+	};
+
+	return (ret);
+}
+
+int
+hgd_cmd_user_noadmin(con_t *con, char **args)
+{
+	int		ret = HGD_FAIL;
+
+	/*TODO: look at NULL pararm */
+	switch(hgd_user_mod_perms(settings.db, NULL, args[0], HGD_AUTH_ADMIN, 0)) {
+	case HGD_OK:
+		OUT( "ok");
+		ret = HGD_OK;
+		break;
+	case HGD_FAIL_USRNOEXIST:
+		    OUT( "err|" HGD_RESP_E_USRNOEXIST);
+		break;
+	case HGD_FAIL_PERMNOCHG:
+		OUT( "err|" HGD_RESP_E_PERMNOCHG);
+		break;
+	default:
+		OUT( "err|" HGD_RESP_E_INT);
+	};
+
+	return (ret);
+}
+
+/*
+ * queue a track
+ *
+ * args: filename|size
+ * reponses
+ * ok...			ok and waiting for payload
+ * ok				ok and payload accepted
+ * err|...
+ *
+ * after 'ok...'
+ * client then sends 'size' bytes of the media to queue
+ */
+int
+hgd_cmd_queue(con_t *con, char **args)
+{
+	char			*filename_p = args[0];
+	size_t			bytes = atoi(args[1]);
+	int			ret = HGD_OK;
+	binary_t		*binary_mode = NULL;
+	char			*filename;
+
+	binary_mode = calloc (1, sizeof(binary_t));
+
+	if ((settings.flood_limit >= 0) &&
+	    (hgd_num_tracks_user(settings.db, con->user->name) >= settings.flood_limit)) {
+
+		DPRINTF(HGD_D_WARN,
+		    "User '%s' trigger flood protection", con->user->name);
+		OUT( "err|" HGD_RESP_E_FLOOD);
+
+		return (HGD_FAIL);
+	}
+
+	/* strip path, we don't care about that */
+	filename = basename(filename_p);
+
+	if ((bytes == 0) || ((long long int) bytes > settings.max_upload_size)) {
+		DPRINTF(HGD_D_WARN, "Incorrect file size");
+		OUT( "err|" HGD_RESP_E_FLSIZE);
+		ret = HGD_FAIL;
+		goto clean;
+	}
+
+	/* prepare to recieve the media file and stash away */
+	xasprintf(&binary_mode->filename, "%s/" HGD_UNIQ_FILE_PFX "%s", settings.filestore_path, filename);
+	DPRINTF(HGD_D_DEBUG, "Template for filestore is '%s'", binary_mode->filename);
+
+	binary_mode->fd = mkstemps(binary_mode->filename, strlen(filename) + 1); /* +1 for hyphen */
+	if (binary_mode->fd < 0) {
+		DPRINTF(HGD_D_ERROR, "mkstemp: %s: %s",
+		    settings.filestore_path, SERROR);
+		OUT( "err|" HGD_RESP_E_INT);
+		ret = HGD_FAIL;
+		goto clean;
+	}
+
+	OUT( "ok|...");
+
+	DPRINTF(HGD_D_INFO, "Recving %d byte payload '%s' from %s into %s",
+	    (int) bytes, filename, con->user->name, binary_mode->filename);
+
+	binary_mode->bytes_left = bytes;
+	con->binary_mode = binary_mode;
+
+
+clean:
+	return (ret);
+}
+
+int
+binary_finished_cb(con_t *con)
+{
+	int ret = HGD_OK;
+	struct hgd_media_tag	tags;
+	binary_t *binary = con->binary_mode;
+	//payload = NULL;
+
+	/*
+	 * get tag metadata
+	 * no error that there is no #ifdef HAVE_TAGLIB
+	 */
+	hgd_get_tag_metadata(binary->filename, &tags);
+
+	/* insert track into db */
+	if (hgd_insert_track(settings.db, basename(binary->filename),
+		    &tags, con->user->name) != HGD_OK) {
+		OUT( "err|" HGD_RESP_E_INT);
+		goto clean;
+	}
+
+	hgd_free_media_tags(&tags);
+
+	OUT( "ok");
+	DPRINTF(HGD_D_INFO, "Transfer of '%s' complete", binary->filename);
+clean:
+	return (ret);
+}
+
+/**
+ * Identify yourself to the server
+ *
+ * args: username, pass
+ */
+int
+hgd_cmd_user(con_t *con, char **args)
+{
+	struct hgd_user		*info;
+
+	DPRINTF(HGD_D_INFO, "User on host '%s' authenticating as '%s'",
+	    con->cli_str, args[0]);
+
+	/* get salt */
+	info = hgd_authenticate_user(settings.db, args[0], args[1]);
+	if (info == NULL) {
+		OUT( "err|" HGD_RESP_E_DENY);
+		return (HGD_FAIL);
+	}
+
+	DPRINTF(HGD_D_INFO, "User '%s' successfully authenticated", args[0]);
+
+	/* only if successful do we assign the info struct */
+	con->user = info;
+	OUT( "ok");
+
+	return (HGD_OK);
+}
+
+int
+hgd_cmd_vote_off(con_t *con, char **args)
+{
+	char				*ipc_path = NULL;
+	char				*scmd, id_str[HGD_ID_STR_SZ], *read;
+	FILE				*ipc_file;
+	int				 open_ret, num_votes;
+	int				 ret = HGD_FAIL;
+
+	DPRINTF(HGD_D_INFO, "%s wants to skip track", con->user->name);
+
+	/*
+	 * Is the file they are voting off playing?
+	 * We check this using the ipc file playd writes for us. This
+	 * contains (if existent), the tid of the currently playing file.
+	 *
+	 * We use this file with locks to avoid race conditions.
+	 */
+	xasprintf(&ipc_path, "%s/%s", state_path, HGD_PLAYING_FILE);
+	open_ret = hgd_file_open_and_lock(ipc_path, F_RDLCK, &ipc_file);
+	switch (open_ret) {
+		case HGD_OK:
+			break; /* good */
+		case HGD_FAIL_ENOENT:
+			DPRINTF(HGD_D_WARN, "nothing playing to vote off");
+			OUT( "err|" HGD_RESP_E_NOPLAY);
+			goto clean;
+			break;
+		default:
+			DPRINTF(HGD_D_ERROR, "failed to open ipc file");
+			OUT( "err|" HGD_RESP_E_INT);
+			goto clean;
+			break;
+	};
+
+	/* Read the track id from the ipc file */
+	read = fgets(id_str, HGD_ID_STR_SZ, ipc_file);
+	hgd_file_unlock_and_close(ipc_file);
+	if (read == NULL) {
+		if (!feof(ipc_file)) {
+			DPRINTF(HGD_D_WARN, "Can't find track id in ipc file");
+			OUT( "err|" HGD_RESP_E_INT);
+			goto clean;
+		}
+	}
+
+	/* this check only happens for the "safe" varient for vo */
+	if ((args != NULL) && (atoi(id_str) != atoi(args[0]))) {
+		DPRINTF(HGD_D_INFO, "Track to voteoff isn't playing");
+		OUT( "err|" HGD_RESP_E_WRTRK);
+		goto clean;
+	}
+
+	/* insert vote */
+	switch (hgd_insert_vote(settings.db, con->user->name)) {
+	case HGD_OK:
+		break; /* good */
+	case HGD_FAIL_DUPVOTE:
+		/* duplicate vote */
+		DPRINTF(HGD_D_INFO, "User '%s' already voted",
+		    con->user->name);
+		OUT( "err|" HGD_RESP_E_DUPVOTE);
+		return (HGD_OK);
+		break;
+	default:
+		OUT( "err|" HGD_RESP_E_INT);
+		return (HGD_FAIL);
+	};
+
+	/* play a sound on voting */
+	if (settings.vote_sound != NULL) {
+		DPRINTF(HGD_D_DEBUG, "Play voteoff sound: '%s'", settings.vote_sound);
+		xasprintf(&scmd, "mplayer -really-quiet %s", settings.vote_sound);
+
+		if (system(scmd) != 0) {
+			/* unreachable as mplayer doesn't return non-zero :\ */
+			DPRINTF(HGD_D_WARN,
+			    "Vote-off noise failed to play: %s", settings.vote_sound);
+		}
+
+		free(scmd);
+	}
+
+	/* are we at the vote limit yet? */
+	if ((hgd_get_num_votes(settings.db, &num_votes)) != HGD_OK) {
+		OUT( "err|" HGD_RESP_E_INT);
+		return (HGD_FAIL);
+	}
+
+	if (num_votes < settings.req_votes) {
+		OUT( "ok");
+		return (HGD_OK);
+	}
+
+	DPRINTF(HGD_D_INFO, "Vote limit exceeded - skip track");
+	if (hgd_skip_track() != HGD_OK) {
+		DPRINTF(HGD_D_ERROR, "Failed to skip track");
+		OUT( "err|" HGD_RESP_E_INT);
+		goto clean;
+	}
+
+	OUT( "ok");
+	ret = HGD_OK;
+clean:
+	if (ipc_path)
+		free(ipc_path);
+
+	return (ret);
+}
+
+int
+hgd_cmd_vote_off_noarg(con_t *con, char **unused)
+{
+	(void) unused;
+	return (hgd_cmd_vote_off(con, NULL));
+}
+
+int
+hgd_cmd_user_add(con_t *con, char **params)
+{
+	int			ret = HGD_FAIL;
+
+	(void) con;
+
+	/* TODO: hgd_user_add second param NULL */
+	switch (hgd_user_add(settings.db, NULL, params[0], params[1])) {
+	case HGD_OK:
+		OUT( "ok");
+		ret = HGD_OK;
+		break;
+	case HGD_FAIL_USREXIST:
+		OUT( "err|" HGD_RESP_E_USREXIST);
+		break;
+	default:
+		OUT( "err|" HGD_RESP_E_INT);
+	}
+
+	return (ret);
+}
+
+int
+hgd_cmd_user_del(con_t *con, char **params)
+{
+	int			ret = HGD_FAIL;
+
+	(void) con;
+
+	switch (hgd_user_del(settings.db, params[0])) {
+	case HGD_OK:
+		OUT( "ok");
+		ret = HGD_OK;
+		break;
+	case HGD_FAIL_USRNOEXIST:
+		OUT( "err|" HGD_RESP_E_USRNOEXIST);
+		break;
+	default:
+		OUT( "err|" HGD_RESP_E_INT);
+	}
+
+	return (ret);
 }
 
 
@@ -263,12 +789,22 @@ struct hgd_cmd_despatch_event	cmd_despatches[] = {
 	{"pl",		0,	1,	0,	HGD_AUTH_NONE,	hgd_cmd_playlist},
 	{"np",		0,	1,	0,	HGD_AUTH_NONE,	hgd_cmd_now_playing},
 	{"proto",	0,	0,	0,	HGD_AUTH_NONE,	hgd_cmd_proto},
-
+	{"q",		2,	1,	1,	HGD_AUTH_NONE,	hgd_cmd_queue},
+	{"user",	2,	1,	0,	HGD_AUTH_NONE,	hgd_cmd_user},
+	{"vo",		0,	1,	1,	HGD_AUTH_NONE,	hgd_cmd_vote_off_noarg},
+	{"vo",		1,	1,	1,	HGD_AUTH_NONE,	hgd_cmd_vote_off},
+	{"user-add",	2,	1,	1,	HGD_AUTH_ADMIN, hgd_cmd_user_add},
+	{"user-del",	1,	1,	1,	HGD_AUTH_ADMIN, hgd_cmd_user_del},
+	{"user-list",	0,	1,	1,	HGD_AUTH_ADMIN, hgd_cmd_user_list},
+	{"user-mkadmin",1,	1,	1,	HGD_AUTH_ADMIN,	hgd_cmd_user_mkadmin},
+	{"user-noadmin",1,	1,	1,	HGD_AUTH_ADMIN,	hgd_cmd_user_noadmin},
+	{"pause",	0,	1,	1,	HGD_AUTH_ADMIN,	hgd_cmd_pause},
+	{"skip",	0,	1,	1,	HGD_AUTH_ADMIN, hgd_cmd_skip},
 	{NULL,		0,	0,	0,	HGD_AUTH_NONE,	hgd_cmd_id}	/* terminate */
 };
 
 /* enusure atleast 1 more than the commamd with the most args */
-	uint8_t
+uint8_t
 hgd_parse_line_event(con_t *con, char *line)
 {
 	char			*tokens[HGD_MAX_PROTO_TOKS];
@@ -288,7 +824,7 @@ hgd_parse_line_event(con_t *con, char *line)
 
 	DPRINTF(HGD_D_DEBUG, "Got %d tokens", n_toks);
 	if ((n_toks == 0) || (strlen(tokens[0]) == 0)) {
-		evbuffer_add_printf(con->out,
+		OUT(
 				"err|" HGD_RESP_E_INVCMD);
 		con->num_bad_commands++;
 		goto clean;
@@ -314,7 +850,7 @@ hgd_parse_line_event(con_t *con, char *line)
 		DPRINTF(HGD_D_DEBUG, "Despatching '%s' handler", tokens[0]);
 
 		DPRINTF(HGD_D_INFO, "Invalid command");
-		evbuffer_add_printf(con->out,  "err|" HGD_RESP_E_INVCMD);
+		OUT(  "err|" HGD_RESP_E_INVCMD);
 		con->num_bad_commands++;
 
 		goto clean;
@@ -335,7 +871,7 @@ hgd_parse_line_event(con_t *con, char *line)
 			(!con->is_ssl)) {
 		DPRINTF(HGD_D_INFO, "Client '%s' is trying to bypass SSL",
 				con->cli_str);
-		evbuffer_add_printf(con->out, "err|" HGD_RESP_E_SSLREQ);
+		OUT( "err|" HGD_RESP_E_SSLREQ);
 		con->num_bad_commands++;
 		goto clean;
 	}
@@ -344,7 +880,7 @@ hgd_parse_line_event(con_t *con, char *line)
 	if (correct_desp->auth_needed && con->user == NULL) {
 		DPRINTF(HGD_D_INFO, "User not authenticated to use '%s'",
 				correct_desp->cmd);
-		evbuffer_add_printf(con->out,  "err|" HGD_RESP_E_DENY);
+		OUT(  "err|" HGD_RESP_E_DENY);
 		con->num_bad_commands++;
 		goto clean;
 	}
@@ -358,7 +894,7 @@ hgd_parse_line_event(con_t *con, char *line)
 			DPRINTF(HGD_D_INFO,
 					"'%s': unauthorised use of admin command",
 					con->cli_str);
-			evbuffer_add_printf(con->out, "err|" HGD_RESP_E_DENY);
+			OUT( "err|" HGD_RESP_E_DENY);
 
 			con->num_bad_commands++;
 			goto clean;
@@ -386,6 +922,10 @@ clean:
 	return (bye);
 }
 
+/**
+ * Creates a ServerSocket for the server.
+ * @return The FileDescriptor of the Server Socket.
+ */
 int create_ss() {
 	int sd;
 	struct sockaddr_in addr;
@@ -427,37 +967,95 @@ int create_ss() {
 
 }
 
+/**
+ * Called whenever a user has sent some data to be processed.
+ * Has two modes line and binary.
+ */
 void read_callback(struct bufferevent *bev, void *ctx)
 {
 	con_t *con = (con_t*) ctx;
 	char * line;
 
 	bufferevent_read_buffer(bev, con->in);
-	line = evbuffer_readln(con->in, NULL, EVBUFFER_EOL_CRLF);
+	if (con->binary_mode == NULL) {
+		line = evbuffer_readln(con->in, NULL, EVBUFFER_EOL_CRLF);
+		DPRINTF(HGD_D_DEBUG, "got line [%s]", line);
+		con->closing = hgd_parse_line_event(con, line);
+		free(line);
+	} else {
+		char data[1024];
+		int bytes_copied = 0;
+		int write_ret;
 
-	DPRINTF(HGD_D_DEBUG, "got line [%s]", line);
+		bytes_copied =
+		    evbuffer_remove(con->in, data,
+		    con->binary_mode->bytes_left < 1024 ?
+		    con->binary_mode->bytes_left : 1024);
+		DPRINTF(HGD_D_DEBUG, "We are in binary recv mode TODO:");
 
-	hgd_parse_line_event(con, line);
-	free(line);
+		con->binary_mode->bytes_left -= bytes_copied;
+		write_ret = write(con->binary_mode->fd, data, bytes_copied);
 
+		if (write_ret < bytes_copied) {
+			/*
+			 * We are not sure if this is possible.
+			 * It has not *yet* happened.
+			 */
+			DPRINTF(HGD_D_ERROR,
+			    "Short write: %d vs %d",
+			    (int) write_ret, (int) bytes_copied);
+			/*TODO: goto clean; */
+		} else if (write_ret < 0) {
+			DPRINTF(HGD_D_ERROR, "Failed to write %d bytes: %s",
+			    (int) bytes_copied, SERROR);
+			OUT( "err|" HGD_RESP_E_INT);
+			unlink(con->binary_mode->filename); /* don't much care if this fails */
+			/* TODO: goto clean; */
+		}
+		if (con->binary_mode->bytes_left == 0) {
+			binary_finished_cb(con);
+			if (con->binary_mode != NULL) {
+				close(con->binary_mode->fd);
+				free(con->binary_mode);
+				con->binary_mode = NULL;
+			}
+		}
+	}
+
+	if (con->closing) {
+		OUT( "ok|Catch you later d00d!");
+		bufferevent_disable(bev, EV_READ);
+	}
 	bufferevent_write_buffer(bev, con->out);
 
 }
 
+/**
+ * This callback is called when the output is exauseted.
+ * If there is any more data to write in the out buffer it is written.
+ */
 void write_callback(struct bufferevent *bev, void *ctx)
 {
 	DPRINTF(HGD_D_DEBUG, "write callback");
 	con_t *con = (con_t*) ctx;
 	bufferevent_write_buffer(bev, con->out);
+	if (con->closing && evbuffer_get_length(bufferevent_get_output(bev)) == 0) {
+		DPRINTF(HGD_D_DEBUG, "all done, closing");
+		bufferevent_free(bev);
+	}
 }
 
 
-void cb(struct bufferevent *bev, short events, void *ptr)
-{
-	puts("TODO:\n");
-}
 
-void accept_cb_func(evutil_socket_t fd, short what, void *arg)
+/**
+ * This callback is called when new users connect.  It sets up buffered
+ * reader for the user to comunicate on.
+ * @param fd filedescriptor of server socket
+ * @param what TODO:
+ * @param args pointer to event_base
+ */
+void
+accept_cb_func(evutil_socket_t fd, short what, void *arg)
 {
 	struct event_base *eb = (struct event_base*) arg;
 	struct bufferevent *bev;
@@ -488,10 +1086,10 @@ void accept_cb_func(evutil_socket_t fd, short what, void *arg)
 	con->out = evbuffer_new();
 	con->in = evbuffer_new();
 
-	bev = bufferevent_socket_new(eb, client_sd, 0);
+	bev = bufferevent_socket_new(eb, client_sd, BEV_OPT_CLOSE_ON_FREE);
 	bufferevent_setcb(bev,read_callback, write_callback, cb, con);
 
-	evbuffer_add_printf(con->out, "ok|" HGD_RESP_O_GREET "\r\n");
+	OUT( "ok|" HGD_RESP_O_GREET);
 
 
 	bufferevent_enable(bev, EV_READ|EV_WRITE);
@@ -504,31 +1102,40 @@ void accept_cb_func(evutil_socket_t fd, short what, void *arg)
 
 }
 
-int main()
+/**
+ * Entry point
+ */
+int
+main()
 {
-	struct event_base *eb;
 	int running = 1;
 	struct event *ev1;
 	char *db_path;
 
 	hgd_debug = 4;
 
+	state_path = xstrdup(HGD_DFL_DIR);
+
 	xasprintf(&db_path, "%s/%s", state_path, HGD_DB_NAME);
+	xasprintf(&(settings.filestore_path), "%s/%s", state_path, HGD_FILESTORE_NAME);
+
+
 	settings.db = hgd_open_db(db_path, 0);
 	if (settings.db == NULL)
 		hgd_exit_nicely();
 
 	event_enable_debug_mode();
 	event_set_log_callback(DPRINTF_cb);
-	eb = event_base_new();
+	settings.eb = event_base_new();
 
-	ev1 = event_new(eb, create_ss(), EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
-			eb);
+	ev1 = event_new(settings.eb, create_ss(), EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
+			settings.eb);
 
 	event_add(ev1, NULL);
 
 	while (running) {
-		event_base_dispatch(eb);
+		event_base_dispatch(settings.eb);
 		puts("Tick");
 	}
+	return (0);
 }
