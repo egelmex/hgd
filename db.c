@@ -509,7 +509,7 @@ hgd_get_playlist(sqlite3 *db, struct hgd_playlist *list)
 }
 
 int
-hgd_get_next_track_cb(void *item, int argc, char **data, char **names)
+hgd_get_next_track_cb(void *item, int argc, char **data, char **names, char *filestore_path)
 {
 	struct hgd_playlist_item	*item_t;
 

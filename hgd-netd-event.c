@@ -26,6 +26,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <sysexits.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -72,20 +73,45 @@
 		evbuffer_add_printf(con->out, "\r\n");	\
 	} while (0)
 
+typedef struct {
+	char			*filestore_path;
+	char			*state_path;
+
+} path_t;
+
+typedef struct {
+	int			 num_configs;
+	char			 *config_paths[4];
+} libconfig_t;
+
 struct netd_settings {
-	int			 crypto_pref;
+	int			 port;
+	uint8_t			 crypto_pref;
 	int			 req_votes;
 	int			 flood_limit;
-	int			 max_upload_size;
+	long long		 max_upload_size;
 	sqlite3			*db;
 	struct event_base	*eb;
-	char			*filestore_path;
 	char			*vote_sound;
+	int			 daemonise;
+	uint8_t			 lookup_client_dns;
+	path_t			 paths;
+	libconfig_t		 libconfig;
 };
 
-struct netd_settings settings = {HGD_CRYPTO_PREF_IF_POSS,
-					2, 100, 1000000, NULL, NULL,
-					NULL, NULL};
+struct netd_settings settings = {
+	.port = 6633,
+	.crypto_pref = HGD_CRYPTO_PREF_IF_POSS,
+	.req_votes = 2,
+	.flood_limit = 100,
+	.max_upload_size = HGD_DFL_MAX_UPLOAD,
+	.db = NULL,
+	.eb = NULL,
+	.vote_sound = NULL,
+	.daemonise = 0,
+	.lookup_client_dns = 0,
+	.paths = {NULL, NULL},
+	.libconfig = {0, {NULL, NULL, NULL, NULL}}};
 
 const char			*hgd_component = HGD_COMPONENT_HGD_NETD;
 
@@ -406,7 +432,7 @@ hgd_cmd_pause(con_t *con, char **unused)
 
 	(void) unused;
 
-	ret = hgd_pause_track();
+	ret = hgd_pause_track(settings.paths.state_path);
 
 	if (ret == HGD_OK)
 		OUT( "ok");
@@ -425,7 +451,7 @@ hgd_cmd_skip(con_t *con, char **unused)
 
 	(void) unused;
 
-	ret = hgd_skip_track();
+	ret = hgd_skip_track(settings.paths.state_path);
 
 	switch (ret) {
 	case HGD_FAIL_NOPLAY:
@@ -533,13 +559,14 @@ hgd_cmd_queue(con_t *con, char **args)
 	}
 
 	/* prepare to recieve the media file and stash away */
-	xasprintf(&binary_mode->filename, "%s/" HGD_UNIQ_FILE_PFX "%s", settings.filestore_path, filename);
+	xasprintf(&binary_mode->filename, "%s/" HGD_UNIQ_FILE_PFX "%s",
+	    settings.paths.filestore_path, filename);
 	DPRINTF(HGD_D_DEBUG, "Template for filestore is '%s'", binary_mode->filename);
 
 	binary_mode->fd = mkstemps(binary_mode->filename, strlen(filename) + 1); /* +1 for hyphen */
 	if (binary_mode->fd < 0) {
 		DPRINTF(HGD_D_ERROR, "mkstemp: %s: %s",
-		    settings.filestore_path, SERROR);
+		    settings.paths.filestore_path, SERROR);
 		OUT( "err|" HGD_RESP_E_INT);
 		ret = HGD_FAIL;
 		goto clean;
@@ -634,7 +661,7 @@ hgd_cmd_vote_off(con_t *con, char **args)
 	 *
 	 * We use this file with locks to avoid race conditions.
 	 */
-	xasprintf(&ipc_path, "%s/%s", state_path, HGD_PLAYING_FILE);
+	xasprintf(&ipc_path, "%s/%s", settings.paths.state_path, HGD_PLAYING_FILE);
 	open_ret = hgd_file_open_and_lock(ipc_path, F_RDLCK, &ipc_file);
 	switch (open_ret) {
 		case HGD_OK:
@@ -711,7 +738,7 @@ hgd_cmd_vote_off(con_t *con, char **args)
 	}
 
 	DPRINTF(HGD_D_INFO, "Vote limit exceeded - skip track");
-	if (hgd_skip_track() != HGD_OK) {
+	if (hgd_skip_track(settings.paths.state_path) != HGD_OK) {
 		DPRINTF(HGD_D_ERROR, "Failed to skip track");
 		OUT( "err|" HGD_RESP_E_INT);
 		goto clean;
@@ -926,11 +953,12 @@ clean:
  * Creates a ServerSocket for the server.
  * @return The FileDescriptor of the Server Socket.
  */
-int create_ss() {
+int create_ss(int port) {
 	int sd;
 	struct sockaddr_in addr;
 	int sockopt = 1;
 
+	DPRINTF(HGD_D_DEBUG, "Listening on port %d", port);
 
 	// Create server socket
 	if( (sd = socket(PF_INET, SOCK_STREAM, 0)) < 0 )
@@ -941,7 +969,7 @@ int create_ss() {
 
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(PORT_NO);
+	addr.sin_port = htons(port);
 	addr.sin_addr.s_addr = INADDR_ANY;
 
 	// Bind socket to address
@@ -991,7 +1019,6 @@ void read_callback(struct bufferevent *bev, void *ctx)
 		    evbuffer_remove(con->in, data,
 		    con->binary_mode->bytes_left < 1024 ?
 		    con->binary_mode->bytes_left : 1024);
-		DPRINTF(HGD_D_DEBUG, "We are in binary recv mode TODO:");
 
 		con->binary_mode->bytes_left -= bytes_copied;
 		write_ret = write(con->binary_mode->fd, data, bytes_copied);
@@ -1102,22 +1129,238 @@ accept_cb_func(evutil_socket_t fd, short what, void *arg)
 
 }
 
+
+static char**
+setup_libconfig()
+{
+	settings.libconfig.config_paths[0] = NULL;
+
+	xasprintf(&settings.libconfig.config_paths[1], "%s",  HGD_GLOBAL_CFG_DIR HGD_SERV_CFG );
+	settings.libconfig.num_configs++;
+
+	settings.libconfig.config_paths[2] = hgd_get_XDG_userprefs_location(netd);
+	settings.libconfig.num_configs++;
+
+}
+
+static int
+hgd_read_config(char **config_locations)
+{
+#ifdef HAVE_LIBCONFIG
+	/*
+	 * config_lookup_int64 is used because lib_config changed
+	 * config_lookup_int from returning a long int, to a int, and debian
+	 * still uses the old version.
+	 * See hgd-playd.c for how to remove the stat when deb get into gear
+	 */
+	config_t		 cfg, *cf;
+
+	cf = &cfg;
+
+	if (hgd_load_config(cf, config_locations) == HGD_FAIL) {
+		return (HGD_OK);
+	}
+
+	hgd_cfg_daemonise(cf, "netd", &settings.daemonise);
+	hgd_cfg_netd_rdns(cf, &settings.lookup_client_dns);
+	hgd_cfg_statepath(cf, &settings.paths.state_path);
+	hgd_cfg_crypto(cf, "netd", &settings.crypto_pref);
+	hgd_cfg_netd_flood_limit(cf, &settings.flood_limit);
+	/*hgd_cf_netd_ssl_privkey(cf, &ssl_key_path); TODO:*/
+	hgd_cfg_netd_votesound(cf, &settings.req_votes);
+	hgd_cfg_netd_port(cf, &settings.port);
+	hgd_cfg_netd_max_filesize(cf, &settings.max_upload_size);
+	/*hgd_cfg_netd_sslcert(cf, &ssl_cert_path); TODO:*/
+	hgd_cfg_debug(cf, "netd", &hgd_debug); /*TODO: put this is settings? */
+	hgd_cfg_netd_voteoff_sound(cf, &settings.vote_sound);
+
+	/* we can destory config here because we copy all heap alloc'd stuff */
+	config_destroy(cf);
+#endif
+
+	return (HGD_OK);
+}
+static void
+hgd_usage(void)
+{
+	printf("usage: hgd-netd <options>\n");
+	printf("    -B			Do not daemonise, run in foreground\n");
+#ifdef HAVE_LIBCONFIG
+	printf("    -c <path>		Path to a config file to use\n");
+#endif
+	printf("    -D			Disable reverse DNS lookups for clients\n");
+	printf("    -d <path>		Set hgd state directory\n");
+	printf("    -E			Disable SSL encryption support\n");
+	printf("    -e			Require SSL encryption from clients\n");
+	printf("    -f			Don't fork - service single client (debug)\n");
+	printf("    -F			Flood limit (-1 for no limit)\n");
+	printf("    -h			Show this message and exit\n");
+	printf("    -k <path>		Set path to SSL private key file\n");
+	printf("    -n <num>		Set number of votes required to vote-off\n");
+	printf("    -p <port>		Set network port number\n");
+	printf("    -s <mbs>		Set maximum upload size (in MB)\n");
+	printf("    -S <path>		Set path to SSL certificate file\n");
+	printf("    -v			Show version and exit\n");
+	printf("    -x <level>		Set debug level (0-3)\n");
+	printf("    -y <path>		Set path to noise to play when voting off\n");
+}
+
+static int
+parse_options_1(int argc, char **argv)
+{
+	int	ch;
+
+	DPRINTF(HGD_D_DEBUG, "Parsing options:1");
+	while ((ch = getopt(argc, argv, "Bc:Dd:EefF:hk:n:p:s:S:vx:y:")) != -1) {
+		switch (ch) {
+		case 'h':
+			/* Do this early so we don't waist time setting up stuff we don't need */
+			hgd_usage();
+			return (HGD_FAIL);
+		case 'c':
+			if (settings.libconfig.num_configs < 3) {
+				settings.libconfig.num_configs++;
+				DPRINTF(HGD_D_DEBUG, "added config %d %s",
+				    settings.libconfig.num_configs, optarg);
+				settings.libconfig.config_paths[settings.libconfig.num_configs] =
+				    optarg;
+			} else {
+				DPRINTF(HGD_D_WARN,
+				    "Too many config files specified");
+				hgd_exit_nicely();
+			}
+			break;
+		case 'x':
+			hgd_debug = atoi(optarg);
+			if (hgd_debug > 3)
+				hgd_debug = 3;
+			DPRINTF(HGD_D_DEBUG, "set debug to %d", hgd_debug);
+			break;
+		default:
+			break; /* next getopt will catch errors */
+		}
+	}
+	RESET_GETOPT();
+	return (HGD_OK);
+}
+
+static int
+parse_options_2(int argc, char **argv)
+{
+	int		ch;
+
+	DPRINTF(HGD_D_DEBUG, "Parsing options:2");
+	while ((ch = getopt(argc, argv, "Bc:Dd:EefF:hk:n:p:s:S:vx:y:")) != -1) {
+		switch (ch) {
+		case 'B':
+			settings.daemonise = 0;
+			DPRINTF(HGD_D_DEBUG, "Not \"backgrounding\" daemon.");
+			break;
+		case 'c':
+			break; /* already handled */
+		case 'D':
+			DPRINTF(HGD_D_DEBUG, "No client DNS lookups");
+			settings.lookup_client_dns = 0;
+			break;
+		case 'd':
+			free(settings.paths.state_path);
+			settings.paths.state_path = xstrdup(optarg);
+			DPRINTF(HGD_D_DEBUG, "Set hgd dir to '%s'", settings.paths.state_path);
+			break;
+		case 'e':
+			settings.crypto_pref = HGD_CRYPTO_PREF_ALWAYS;
+			DPRINTF(HGD_D_DEBUG, "Server will insist on crypto");
+			break;
+		case 'E':
+			settings.crypto_pref = HGD_CRYPTO_PREF_NEVER;
+			DPRINTF(HGD_D_WARN, "Encryption disabled manually");
+			break;
+		case 'F':
+			settings.flood_limit = atoi(optarg);
+			DPRINTF(HGD_D_DEBUG, "Set flood limit to %d",
+			    settings.flood_limit);
+			break;
+		case 'k':
+			/* TODO:
+			free(ssl_key_path);
+			ssl_key_path = optarg;
+			DPRINTF(HGD_D_DEBUG,
+			    "set ssl private key path to '%s'", ssl_key_path);
+			*/
+			break;
+		case 'n':
+			settings.req_votes = atoi(optarg);
+			DPRINTF(HGD_D_DEBUG,
+			    "Set required-votes to %d", settings.req_votes);
+			break;
+		case 'p':
+			settings.port = atoi(optarg);
+			DPRINTF(HGD_D_DEBUG, "Set port to %d", settings.port);
+			break;
+		case 's':
+			settings.max_upload_size = strtoll(optarg, NULL, 0) * HGD_MB;
+			DPRINTF(HGD_D_DEBUG, "Set max upload size to %lld",
+			    (long long int) settings.max_upload_size);
+			break;
+		case 'S':
+			/* TODO:
+			free(ssl_cert_path);
+			ssl_cert_path = optarg;
+			DPRINTF(HGD_D_DEBUG,
+			    "set ssl cert path to '%s'", ssl_cert_path);
+			*/
+			break;
+		case 'v':
+			hgd_print_version();
+			return (HGD_FAIL);
+			break;
+		case 'x':
+			DPRINTF(HGD_D_DEBUG, "set debug to %d", atoi(optarg));
+			hgd_debug = atoi(optarg);
+			if (hgd_debug > 3)
+				hgd_debug = 3;
+			break; /* already set but over-rideable */
+		case 'y':
+			free(settings.vote_sound);
+			settings.vote_sound = optarg;
+			DPRINTF(HGD_D_DEBUG,
+			    "set voteoff sound %s", settings.vote_sound);
+			break;
+		};
+	}
+
+	return (HGD_OK);
+}
+
 /**
  * Entry point
  */
 int
-main()
+main(int argc, char **argv)
 {
 	int running = 1;
 	struct event *ev1;
 	char *db_path;
 
+	/* TODO: signal handlers */
+
+	HGD_INIT_SYSLOG_DAEMON();
+
 	hgd_debug = 4;
 
-	state_path = xstrdup(HGD_DFL_DIR);
+	settings.paths.state_path = xstrdup(HGD_DFL_DIR);
+	xasprintf(&db_path, "%s/%s", settings.paths.state_path, HGD_DB_NAME);
+	xasprintf(&(settings.paths.filestore_path), "%s/%s",
+	    settings.paths.state_path, HGD_FILESTORE_NAME);
 
-	xasprintf(&db_path, "%s/%s", state_path, HGD_DB_NAME);
-	xasprintf(&(settings.filestore_path), "%s/%s", state_path, HGD_FILESTORE_NAME);
+	setup_libconfig();
+
+	if (parse_options_1(argc, argv) != HGD_OK)
+		goto exit;
+	hgd_read_config(settings.libconfig.config_paths + settings.libconfig.num_configs);
+	if (parse_options_2(argc, argv) != HGD_OK)
+		goto exit;
+
 
 
 	settings.db = hgd_open_db(db_path, 0);
@@ -1128,7 +1371,7 @@ main()
 	event_set_log_callback(DPRINTF_cb);
 	settings.eb = event_base_new();
 
-	ev1 = event_new(settings.eb, create_ss(), EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
+	ev1 = event_new(settings.eb, create_ss(settings.port), EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
 			settings.eb);
 
 	event_add(ev1, NULL);
@@ -1138,4 +1381,7 @@ main()
 		puts("Tick");
 	}
 	return (0);
+
+exit:
+	_exit(EX_OK);
 }

@@ -115,9 +115,6 @@ extern int			  syslog_error_map[];
 extern pid_t			  pid;
 extern const char		 *hgd_component;
 
-extern char			 *state_path;
-extern char			 *filestore_path;
-
 
 
 struct hgd_user {
@@ -318,7 +315,7 @@ int				 hgd_setup_ssl_ctx(SSL_METHOD **method,
 
 /* misc */
 uint8_t				 hgd_is_ip_addr(char *str);
-void				 hgd_mk_state_dir(void);
+void				 hgd_mk_state_dir(char* state_path);
 void				 hgd_print_version(void);
 void				 hgd_exit_nicely(void);
 void				 hgd_kill_sighandler(int sig);
@@ -340,11 +337,11 @@ int				 hgd_file_unlock_and_close( FILE *file);
 int				 hgd_file_open_and_lock(
 				     char *fname, int type, FILE **file);
 void				 hgd_set_line_colour(char *ansi_code);
-int				 hgd_unlink_pid_file(void);
+int				 hgd_unlink_pid_file(char* state_path);
 int				 hgd_write_pid_file(FILE  **file);
-int				 hgd_open_pid_file(FILE  **file);
+int				 hgd_open_pid_file(FILE  **file, char* state_path);
 int				 hgd_check_component_status(
-				     char *component, int *running);
+				     char *component, int *running, char *state_path);
 
 
 #endif

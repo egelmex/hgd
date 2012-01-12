@@ -65,7 +65,6 @@ struct hgd_user_perm hgd_user_perms[] = {
 };
 
 /* these are unused in client */
-char				 *state_path = NULL;
 char				 *filestore_path = NULL;
 
 void
@@ -219,7 +218,7 @@ hgd_register_sig_handlers()
 
 /* make state dir if not existing */
 void
-hgd_mk_state_dir()
+hgd_mk_state_dir(char* state_path)
 {
 	if (mkdir(state_path, S_IRWXU) != 0) {
 		if (errno != EEXIST) {
@@ -550,7 +549,7 @@ hgd_set_line_colour(char *ansi_code)
 }
 
 int
-hgd_open_pid_file(FILE **pidfile)
+hgd_open_pid_file(FILE **pidfile, char* state_path)
 {
 	char			*path;
 	int			 ret = HGD_FAIL, sr;
@@ -603,7 +602,7 @@ clean:
 }
 
 int
-hgd_unlink_pid_file()
+hgd_unlink_pid_file(char* state_path)
 {
 	char			*path;
 	int			 ret = HGD_FAIL;
@@ -642,7 +641,7 @@ clean:
  * you can not be sure.
  */
 int
-hgd_check_component_status(char *component, int *running)
+hgd_check_component_status(char *component, int *running, char* state_path)
 {
 	char			*path = NULL, pid_str[HGD_PID_STR_SZ];
 	int			 ret = HGD_FAIL;

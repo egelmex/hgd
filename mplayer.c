@@ -43,7 +43,7 @@
 char			*mplayer_fifo_path = 0;
 
 int
-hgd_mplayer_pipe_send(char *what)
+hgd_mplayer_pipe_send(char *what, char *state_path)
 {
 	FILE			*pipe = NULL;
 	int			 ret = HGD_FAIL;
@@ -105,15 +105,15 @@ hgd_make_mplayer_input_fifo(void)
 }
 
 int
-hgd_pause_track()
+hgd_pause_track(char *state_path)
 {
-	return (hgd_mplayer_pipe_send("pause\n"));
+	return (hgd_mplayer_pipe_send("pause\n", state_path));
 }
 
 int
-hgd_skip_track()
+hgd_skip_track(char *state_path)
 {
-	return (hgd_mplayer_pipe_send("stop\n"));
+	return (hgd_mplayer_pipe_send("stop\n", state_path));
 }
 
 /*
