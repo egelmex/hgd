@@ -7,7 +7,7 @@ AC_LANG_C
 AC_PROG_MAKE_SET
 AC_HEADER_STDC
 
-ALL_TARGETS="hgdc"
+ALL_TARGETS=""
 INSTALL_TARGETS="install-hgdc install-readme install-man-hgd-proto install-example-client"
 
 # we need the install prefix at compile time
@@ -134,7 +134,7 @@ AC_CHECK_FUNC([readpassphrase],,
 # ssl always needed, hashing / crypto
 PKG_CHECK_MODULES([SSL], [openssl >= 0.9.8])
 
-PKG_CHECK_MODULES([EVENT], [libevent >= 2.0.10])
+PKG_CHECK_MODULES([EVENT], [libevent >= 2.0.10, libevent_openssl >= 2.0.10])
 
 # libconfig
 AS_IF([test "x$with_libconfig" != "xno"], 

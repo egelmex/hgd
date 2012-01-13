@@ -111,7 +111,7 @@ hgd_cfg_statepath(config_t *cf, char **state_path)
 }
 
 void
-hgd_cfg_crypto(config_t *cf, char *service, uint8_t *crypto_pref)
+hgd_cfg_crypto(config_t *cf, char *service, enum crypto_pref_e *crypto_pref)
 {
 	char			*crypto;
 	/* -e -E */
@@ -119,15 +119,16 @@ hgd_cfg_crypto(config_t *cf, char *service, uint8_t *crypto_pref)
 		if (strcmp(crypto, "always") == 0) {
 			DPRINTF(HGD_D_DEBUG, "%s will insist upon cryto",
 			    service);
-			*crypto_pref = HGD_CRYPTO_PREF_ALWAYS;
+			*crypto_pref = always;
 		} else if (strcmp(crypto, "never") == 0) {
 			DPRINTF(HGD_D_DEBUG, "%s will insist upon "
 			   " no crypto", service);
-			*crypto_pref = HGD_CRYPTO_PREF_NEVER;
+			*crypto_pref = never;
 		} else if (strcmp(crypto, "if_avaliable") == 0) {
 			DPRINTF(HGD_D_DEBUG,
 			    "%s will use crypto if avaliable",
 			    service);
+			*crypto = if_poss;
 		} else {
 			DPRINTF(HGD_D_WARN,
 			    "Invalid crypto option, using default");

@@ -62,9 +62,11 @@
 #define HGD_DFL_CERT_FILE	HGD_DFL_SVR_CONF_DIR "/certificate.crt"
 #define HGD_DFL_KEY_FILE	HGD_DFL_SVR_CONF_DIR "/privkey.key"
 
-#define	HGD_CRYPTO_PREF_ALWAYS	0
-#define HGD_CRYPTO_PREF_IF_POSS	1
-#define HGD_CRYPTO_PREF_NEVER	2
+enum crypto_pref_e {
+	always = 0,
+	if_poss,
+	never
+};
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -75,7 +77,7 @@
 		unsigned long err;					\
 		err = ERR_get_error();					\
 		ERR_error_string_n(err, error, sizeof(error));		\
-		DPRINTF(level, "%s: %s", msg, error);		\
+		DPRINTF(level, "%s: %s", msg, error);			\
 	} while(0)
 
 void				 hgd_cleanup_ssl(SSL_CTX **ssl);

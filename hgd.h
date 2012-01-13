@@ -175,6 +175,7 @@ typedef struct {
 typedef struct {
 	struct evbuffer		*in;
 	struct evbuffer		*out;
+	struct bufferevent	*bev;
 	int			 num_bad_commands;
 	char			*cli_str;
 	struct hgd_user		*user;

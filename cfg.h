@@ -21,12 +21,13 @@
 #include <libconfig.h>
 #include <stdint.h>
 #include "hgd.h"
+#include "net.h"
 
 int	 hgd_load_config(config_t *cf, char **config_locations);
 void	 hgd_cfg_daemonise(config_t *cf, char *service, int *background);
 void	 hgd_cfg_netd_rdns(config_t *cf, uint8_t *lookup_client_dns);
 void	 hgd_cfg_statepath(config_t *cf, char **state_path);
-void	 hgd_cfg_crypto(config_t *cf, char* service, uint8_t *crypro_pref);
+void	 hgd_cfg_crypto(config_t *cf, char* service, enum crypto_pref_e *crypro_pref);
 void	 hgd_cfg_fork(config_t *cf, char *service, uint8_t *single_client);
 void	 hgd_cfg_netd_flood_limit(config_t *cf, int *flood_limit);
 void	 hgd_cf_netd_ssl_privkey(config_t *cf, char **ssl_key_path);

@@ -21,6 +21,7 @@
 #include <event2/event.h>
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
+#include <event2/bufferevent_ssl.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -84,10 +85,16 @@ typedef struct {
 	char			 *config_paths[4];
 } libconfig_t;
 
+struct ssl_settings {
+	int			 ssl_capable;
+	SSL_METHOD		*method;
+	enum crypto_pref_e	 crypto_pref;
+	SSL_CTX			*ctx;
+};
+
 struct netd_settings {
-	int			 port;
-	uint8_t			 crypto_pref;
 	int			 req_votes;
+	int			 port;
 	int			 flood_limit;
 	long long		 max_upload_size;
 	sqlite3			*db;
@@ -97,11 +104,11 @@ struct netd_settings {
 	uint8_t			 lookup_client_dns;
 	path_t			 paths;
 	libconfig_t		 libconfig;
+	struct ssl_settings	ssl;
 };
 
 struct netd_settings settings = {
 	.port = 6633,
-	.crypto_pref = HGD_CRYPTO_PREF_IF_POSS,
 	.req_votes = 2,
 	.flood_limit = 100,
 	.max_upload_size = HGD_DFL_MAX_UPLOAD,
@@ -111,7 +118,10 @@ struct netd_settings settings = {
 	.daemonise = 0,
 	.lookup_client_dns = 0,
 	.paths = {NULL, NULL},
-	.libconfig = {0, {NULL, NULL, NULL, NULL}}};
+	.libconfig = {0, {NULL, NULL, NULL, NULL}},
+	.ssl = {0, NULL, if_poss, NULL}
+};
+
 
 const char			*hgd_component = HGD_COMPONENT_HGD_NETD;
 
@@ -561,7 +571,8 @@ hgd_cmd_queue(con_t *con, char **args)
 	/* prepare to recieve the media file and stash away */
 	xasprintf(&binary_mode->filename, "%s/" HGD_UNIQ_FILE_PFX "%s",
 	    settings.paths.filestore_path, filename);
-	DPRINTF(HGD_D_DEBUG, "Template for filestore is '%s'", binary_mode->filename);
+	DPRINTF(HGD_D_DEBUG, "Template for filestore is '%s'",
+	    binary_mode->filename);
 
 	binary_mode->fd = mkstemps(binary_mode->filename, strlen(filename) + 1); /* +1 for hyphen */
 	if (binary_mode->fd < 0) {
@@ -805,6 +816,61 @@ hgd_cmd_user_del(con_t *con, char **params)
 	return (ret);
 }
 
+int
+hgd_cmd_encrypt_questionmark(con_t *con, char **unused)
+{
+	(void) unused;
+
+	if ((settings.ssl.crypto_pref != never) && (settings.ssl.ssl_capable))
+		OUT ("ok|tlsv1");
+	else
+		OUT ("ok|nocrypto");
+
+	return (HGD_OK);
+}
+
+int
+hgd_cmd_encrypt(con_t *con, char **unused)
+{
+	int			 ssl_err = 0, ret = -1;
+	SSL			*ssl;
+	(void) unused;
+
+	if (con->is_ssl) {
+		DPRINTF(HGD_D_WARN, "User tried to enable encyption twice");
+		OUT ("err|" HGD_RESP_E_SSLAGN);
+		return (HGD_FAIL);
+	}
+
+	if ((!settings.ssl.ssl_capable) || (settings.ssl.crypto_pref == never)) {
+		DPRINTF(HGD_D_WARN, "User tried encrypt, when not possible");
+		OUT("err|" HGD_RESP_E_SSLNOAVAIL);
+		return (HGD_FAIL);
+	}
+
+	DPRINTF(HGD_D_DEBUG, "New SSL for session");
+	ssl = SSL_new(settings.ssl.ctx);
+	if (ssl == NULL) {
+		PRINT_SSL_ERR(HGD_D_ERROR, "SSL_new");
+		goto clean;
+	}
+	con->is_ssl = 1;
+	bufferevent_openssl_filter_new(settings.eb, con->bev, ssl,
+	    BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+
+	ret = HGD_OK; /* all is well */
+clean:
+
+	if (ret == HGD_FAIL) {
+		DPRINTF(HGD_D_INFO, "SSL connection failed");
+		hgd_exit_nicely(); /* be paranoid and kick client */
+	} else {
+		DPRINTF(HGD_D_INFO, "SSL connection established");
+		OUT("ok");
+	}
+
+	return (ret);
+}
 
 /* lookup table for command handlers */
 struct hgd_cmd_despatch_event	cmd_despatches[] = {
@@ -812,6 +878,8 @@ struct hgd_cmd_despatch_event	cmd_despatches[] = {
 	/* bye is special */
 	{"bye",		0,	0,	0,	HGD_AUTH_NONE,	NULL},
 	{"id",		0,	0,	1,	HGD_AUTH_NONE,	NULL},
+	{"encrypt",	0,	0,	0,	HGD_AUTH_NONE,	hgd_cmd_encrypt},
+	{"encrypt?",	0,	0,	0,	HGD_AUTH_NONE,	hgd_cmd_encrypt_questionmark},
 	{"ls",		0,	1,	0,	HGD_AUTH_NONE,	hgd_cmd_playlist},
 	{"pl",		0,	1,	0,	HGD_AUTH_NONE,	hgd_cmd_playlist},
 	{"np",		0,	1,	0,	HGD_AUTH_NONE,	hgd_cmd_now_playing},
@@ -893,7 +961,7 @@ hgd_parse_line_event(con_t *con, char *line)
 	 * of commands will be out of bounds until encryption is
 	 * estabished.
 	 */
-	if ((settings.crypto_pref == HGD_CRYPTO_PREF_ALWAYS) &&
+	if ((settings.ssl.crypto_pref == always) &&
 			(correct_desp->secure) &&
 			(!con->is_ssl)) {
 		DPRINTF(HGD_D_INFO, "Client '%s' is trying to bypass SSL",
@@ -1015,30 +1083,35 @@ void read_callback(struct bufferevent *bev, void *ctx)
 		int bytes_copied = 0;
 		int write_ret;
 
-		bytes_copied =
-		    evbuffer_remove(con->in, data,
-		    con->binary_mode->bytes_left < 1024 ?
-		    con->binary_mode->bytes_left : 1024);
+		do {
+			bytes_copied =
+			    evbuffer_remove(con->in, data,
+			    con->binary_mode->bytes_left < 1024 ?
+			    con->binary_mode->bytes_left : 1024);
+			DPRINTF(HGD_D_DEBUG, "Recieved %d bytes %d to go:",
+				bytes_copied, con->binary_mode->bytes_left);
 
-		con->binary_mode->bytes_left -= bytes_copied;
-		write_ret = write(con->binary_mode->fd, data, bytes_copied);
+			con->binary_mode->bytes_left -= bytes_copied;
+			write_ret = write(con->binary_mode->fd, data, bytes_copied);
 
-		if (write_ret < bytes_copied) {
-			/*
-			 * We are not sure if this is possible.
-			 * It has not *yet* happened.
-			 */
-			DPRINTF(HGD_D_ERROR,
-			    "Short write: %d vs %d",
-			    (int) write_ret, (int) bytes_copied);
-			/*TODO: goto clean; */
-		} else if (write_ret < 0) {
-			DPRINTF(HGD_D_ERROR, "Failed to write %d bytes: %s",
-			    (int) bytes_copied, SERROR);
-			OUT( "err|" HGD_RESP_E_INT);
-			unlink(con->binary_mode->filename); /* don't much care if this fails */
-			/* TODO: goto clean; */
-		}
+			if (write_ret < bytes_copied) {
+				/*
+				 * We are not sure if this is possible.
+				 * It has not *yet* happened.
+				 */
+				DPRINTF(HGD_D_ERROR,
+				    "Short write: %d vs %d",
+				    (int) write_ret, (int) bytes_copied);
+				/*TODO: goto clean; */
+			} else if (write_ret < 0) {
+				DPRINTF(HGD_D_ERROR, "Failed to write %d bytes: %s",
+				    (int) bytes_copied, SERROR);
+				OUT( "err|" HGD_RESP_E_INT);
+				unlink(con->binary_mode->filename); /* don't much care if this fails */
+				/* TODO: goto clean; */
+			}
+		} while ( con->binary_mode->bytes_left > 0 && evbuffer_get_length(con->in) > 0 );
+
 		if (con->binary_mode->bytes_left == 0) {
 			binary_finished_cb(con);
 			if (con->binary_mode != NULL) {
@@ -1164,7 +1237,7 @@ hgd_read_config(char **config_locations)
 	hgd_cfg_daemonise(cf, "netd", &settings.daemonise);
 	hgd_cfg_netd_rdns(cf, &settings.lookup_client_dns);
 	hgd_cfg_statepath(cf, &settings.paths.state_path);
-	hgd_cfg_crypto(cf, "netd", &settings.crypto_pref);
+	hgd_cfg_crypto(cf, "netd", &settings.ssl.crypto_pref);
 	hgd_cfg_netd_flood_limit(cf, &settings.flood_limit);
 	/*hgd_cf_netd_ssl_privkey(cf, &ssl_key_path); TODO:*/
 	hgd_cfg_netd_votesound(cf, &settings.req_votes);
@@ -1268,11 +1341,11 @@ parse_options_2(int argc, char **argv)
 			DPRINTF(HGD_D_DEBUG, "Set hgd dir to '%s'", settings.paths.state_path);
 			break;
 		case 'e':
-			settings.crypto_pref = HGD_CRYPTO_PREF_ALWAYS;
+			settings.ssl.crypto_pref = always;
 			DPRINTF(HGD_D_DEBUG, "Server will insist on crypto");
 			break;
 		case 'E':
-			settings.crypto_pref = HGD_CRYPTO_PREF_NEVER;
+			settings.ssl.crypto_pref = never;
 			DPRINTF(HGD_D_WARN, "Encryption disabled manually");
 			break;
 		case 'F':
@@ -1328,7 +1401,30 @@ parse_options_2(int argc, char **argv)
 			break;
 		};
 	}
+	return (HGD_OK);
+}
 
+int
+setup_SSL()
+{
+	char *ssl_cert_path = NULL, *ssl_key_path =  NULL;
+
+	ssl_key_path = xstrdup(HGD_DFL_KEY_FILE);
+	ssl_cert_path = xstrdup(HGD_DFL_CERT_FILE);
+	/* TODO: set paths */
+	/* unless the user actively disables SSL, we try to be capable */
+	if (settings.ssl.crypto_pref != never) {
+		if (hgd_setup_ssl_ctx(&(settings.ssl.method),
+		    &(settings.ssl.ctx), 1,
+		    ssl_cert_path, ssl_key_path) == 0) {
+			DPRINTF(HGD_D_INFO, "Server is SSL capable");
+			settings.ssl.ssl_capable = 1;
+		} else {
+			DPRINTF(HGD_D_WARN, "Server is SSL incapable");
+		}
+	} else {
+		DPRINTF(HGD_D_INFO, "Server was forced SSL incapable");
+	}
 	return (HGD_OK);
 }
 
@@ -1371,8 +1467,10 @@ main(int argc, char **argv)
 	event_set_log_callback(DPRINTF_cb);
 	settings.eb = event_base_new();
 
-	ev1 = event_new(settings.eb, create_ss(settings.port), EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
-			settings.eb);
+	setup_SSL();
+	ev1 = event_new(settings.eb, create_ss(settings.port),
+	    EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
+	    settings.eb);
 
 	event_add(ev1, NULL);
 
