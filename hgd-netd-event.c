@@ -124,12 +124,15 @@ struct netd_settings settings = {
 
 
 const char			*hgd_component = HGD_COMPONENT_HGD_NETD;
+int				 hup = 0;
+
+
 
 void cb_func(struct bufferevent *bev, short what, void *arg)
 {
         const char *data = arg;
         printf("Got an event on socket %d:%s%s%s%s [%s]",
-            (int) what`,
+            (int) what,
             (what&EV_TIMEOUT) ? " timeout" : "",
             (what&EV_READ)    ? " read" : "",
             (what&EV_WRITE)   ? " write" : "",
@@ -900,7 +903,8 @@ clean:
 }
 
 /* lookup table for command handlers */
-struct hgd_cmd_despatch_event	cmd_despatches[] = {
+struct hgd_cmd_despatch_event	cmd_despatches[] =
+{
 	/* cmd,		n_args,	secure,	auth,	auth_lvl,	handler_function */
 	/* bye is special */
 	{"bye",		0,	0,	0,	HGD_AUTH_NONE,	NULL},
@@ -1048,7 +1052,8 @@ clean:
  * Creates a ServerSocket for the server.
  * @return The FileDescriptor of the Server Socket.
  */
-int create_ss(int port) {
+int create_ss(int port)
+{
 	int sd;
 	struct sockaddr_in addr;
 	int sockopt = 1;
@@ -1157,7 +1162,7 @@ void read_callback(struct bufferevent *bev, void *ctx)
 	}
 
 	if (con->closing) {
-		DPRINTF(HGD_D_DEBUG, "");
+		DPRINTF(HGD_D_DEBUG, "closing");
 		//if (con->is_ssl) {
 		//	SSL *ctx = bufferevent_openssl_get_ssl(con->bev);
 
@@ -1193,7 +1198,7 @@ void write_callback(struct bufferevent *bev, void *ctx)
 
 		bufferevent_enable(con->bev, EV_READ | EV_WRITE | EV_SIGNAL);
 		OUT("ok");
-		bufferevent_setcb(con->bev,read_callback, write_callback, cb,
+		bufferevent_setcb(con->bev,read_callback, write_callback, cb_func,
 		    con);
 		bufferevent_write_buffer(con->bev, con->out);
 		con->ssl = NULL;
@@ -1506,17 +1511,25 @@ setup_SSL()
 	return (HGD_OK);
 }
 
+
+void
+hup_h (int sig)
+{
+	event_base_loopbreak(settings.eb);
+	hup = 1;
+
+}
+
 /**
  * Entry point
  */
 int
 main(int argc, char **argv)
 {
-	int running = 1;
 	struct event *ev1;
 	char *db_path;
 
-	/* TODO: signal handlers */
+	signal (SIGHUP, hup_h);
 
 	HGD_INIT_SYSLOG_DAEMON();
 
@@ -1531,7 +1544,8 @@ main(int argc, char **argv)
 
 	if (parse_options_1(argc, argv) != HGD_OK)
 		goto exit;
-	hgd_read_config(settings.libconfig.config_paths + settings.libconfig.num_configs);
+	hgd_read_config(settings.libconfig.config_paths +
+	    settings.libconfig.num_configs);
 	if (parse_options_2(argc, argv) != HGD_OK)
 		goto exit;
 
@@ -1552,10 +1566,16 @@ main(int argc, char **argv)
 
 	event_add(ev1, NULL);
 
-	while (running) {
-		event_base_dispatch(settings.eb);
-		puts("Tick");
+	event_base_dispatch(settings.eb);
+
+	if (hup) {
+		DPRINTF(HGD_D_INFO, "HUP now!");
+		if (execv(argv[0], argv) < 0) {
+			DPRINTF(HGD_D_ERROR, "Failed to restart"
+			    ", is %s in your path?: %s", hgd_component, SERROR);
+		}
 	}
+
 	return (0);
 
 exit:
