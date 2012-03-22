@@ -86,6 +86,8 @@ typedef struct {
 } libconfig_t;
 
 struct ssl_settings {
+	char			*ssl_cert_path;
+	char			*ssl_key_path;
 	int			 ssl_capable;
 	SSL_METHOD		*method;
 	enum crypto_pref_e	 crypto_pref;
@@ -119,7 +121,7 @@ struct netd_settings settings = {
 	.lookup_client_dns = 0,
 	.paths = {NULL, NULL},
 	.libconfig = {0, {NULL, NULL, NULL, NULL}},
-	.ssl = {0, NULL, if_poss, NULL}
+	.ssl = {NULL, NULL, 0, NULL, if_poss, NULL}
 };
 
 
@@ -1433,12 +1435,10 @@ parse_options_2(int argc, char **argv)
 			    settings.flood_limit);
 			break;
 		case 'k':
-			/* TODO:
 			free(ssl_key_path);
-			ssl_key_path = optarg;
+			settings.ssl.ssl_key_path = optarg;
 			DPRINTF(HGD_D_DEBUG,
 			    "set ssl private key path to '%s'", ssl_key_path);
-			*/
 			break;
 		case 'n':
 			settings.req_votes = atoi(optarg);
@@ -1455,12 +1455,10 @@ parse_options_2(int argc, char **argv)
 			    (long long int) settings.max_upload_size);
 			break;
 		case 'S':
-			/* TODO:
 			free(ssl_cert_path);
-			ssl_cert_path = optarg;
+			settings.ssl.ssl_cert_path = optarg;
 			DPRINTF(HGD_D_DEBUG,
 			    "set ssl cert path to '%s'", ssl_cert_path);
-			*/
 			break;
 		case 'v':
 			hgd_print_version();
@@ -1507,13 +1505,14 @@ setup_SSL()
 	return (HGD_OK);
 }
 
-
+/**
+ * Signal handler for SIGHUP/SIGINT.
+ */
 void
-hup_h (int sig)
+sig_h (int sig)
 {
 	event_base_loopbreak(settings.eb);
-	hup = 1;
-
+	if (SIGHUP) hup = 1;
 }
 
 /**
@@ -1526,7 +1525,8 @@ main(int argc, char **argv)
 	char		*db_path;
 	int		 ss;
 
-	signal (SIGHUP, hup_h);
+	signal (SIGHUP, sig_h);
+	signal (SIGINT, sig_h);
 
 	HGD_INIT_SYSLOG_DAEMON();
 
