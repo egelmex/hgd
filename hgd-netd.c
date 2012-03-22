@@ -118,6 +118,20 @@ hgd_exit_nicely()
 	_exit (!exit_ok);
 }
 
+void
+cb(struct bufferevent *bev, short what, void *arg)
+{
+        const char *data = arg;
+        printf("Got an event on socket %d:%s%s%s%s [%s]",
+            (int) what,
+            (what&EV_TIMEOUT) ? " timeout" : "",
+            (what&EV_READ)    ? " read" : "",
+            (what&EV_WRITE)   ? " write" : "",
+            (what&EV_SIGNAL)  ? " signal" : "",
+            data);
+}
+
+
 int
 hgd_get_tag_metadata(char *filename, struct hgd_media_tag *meta)
 {

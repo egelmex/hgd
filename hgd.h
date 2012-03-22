@@ -180,6 +180,7 @@ typedef struct {
 	char			*cli_str;
 	struct hgd_user		*user;
 	int			 is_ssl;
+	SSL			*ssl;
 	binary_t		*binary_mode;
 	int			 closing;
 } con_t;

@@ -125,7 +125,26 @@ struct netd_settings settings = {
 
 const char			*hgd_component = HGD_COMPONENT_HGD_NETD;
 
-int
+void cb_func(struct bufferevent *bev, short what, void *arg)
+{
+        const char *data = arg;
+        printf("Got an event on socket %d:%s%s%s%s [%s]",
+            (int) what`,
+            (what&EV_TIMEOUT) ? " timeout" : "",
+            (what&EV_READ)    ? " read" : "",
+            (what&EV_WRITE)   ? " write" : "",
+            (what&EV_SIGNAL)  ? " signal" : "",
+            data);
+}
+
+
+/**
+ * Get the meta data for a file.
+ * @param filename to scan
+ * @param pointer to struct to store result in
+ * @return HGD_OK on success.
+ */
+static int
 hgd_get_tag_metadata(char *filename, struct hgd_media_tag *meta)
 {
 #ifdef HAVE_TAGLIB
@@ -203,19 +222,23 @@ hgd_get_tag_metadata(char *filename, struct hgd_media_tag *meta)
 	return (HGD_OK);
 }
 
-
+/**
+ * Cleans up any remaning state.
+ */
 void
 hgd_exit_nicely()
 {
-	DPRINTF(HGD_D_ERROR, "TODO:");
+	DPRINTF(HGD_D_ERROR, "HGD_EXITING.");
+	/* XXX: do we need to clean anything up? */
+	exit(0);
 }
 
-void cb(struct bufferevent *bev, short events, void *ptr)
-{
-	puts("TODO:\n");
-}
-
-static void DPRINTF_cb(int severity, const char *msg)
+/**
+ * Callback for printing debug messages from libevent with DPRINTF.
+ * @note the line numbers will point here not to where in libevent2 the error came from.
+ */
+static void
+DPRINTF_cb(int severity, const char *msg)
 {
 	int s;
 	switch (severity) {
@@ -228,12 +251,12 @@ static void DPRINTF_cb(int severity, const char *msg)
 	DPRINTF(s, "%s", msg);
 }
 
-/*
+/**
  * user|perms|has_vote?
  *
  * authentication has already been checked here
  */
-	int
+static int
 hgd_cmd_id(con_t *con, char **args)
 {
 	int			 vote = -1;
@@ -254,7 +277,7 @@ hgd_cmd_id(con_t *con, char **args)
 	return (HGD_OK);
 }
 
-/*
+/**
  * respond to client what is currently playing.
  *
  * response:
@@ -262,7 +285,7 @@ hgd_cmd_id(con_t *con, char **args)
  * ok|1|id|filename|user	track is playing
  * err|...			failure
  */
-int
+static int
 hgd_cmd_now_playing(con_t *con, char **args)
 {
 	struct hgd_playlist_item	 playing;
@@ -318,7 +341,7 @@ hgd_cmd_now_playing(con_t *con, char **args)
 	return (HGD_OK);
 }
 
-int
+static int
 hgd_cmd_proto(con_t *con, char **unused)
 {
 	char			*reply;
@@ -336,7 +359,7 @@ hgd_cmd_proto(con_t *con, char **unused)
 /*
  * report back items in the playlist
  */
-int
+static int
 hgd_cmd_playlist(con_t *con, char **args)
 {
 	char			*resp;
@@ -401,7 +424,7 @@ hgd_cmd_playlist(con_t *con, char **args)
 	return (HGD_OK);
 }
 
-int
+static int
 hgd_cmd_user_list(con_t *con, char **args)
 {
 	struct hgd_user_list	*list;
@@ -435,7 +458,7 @@ clean:
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_pause(con_t *con, char **unused)
 {
 	int ret;
@@ -454,7 +477,7 @@ hgd_cmd_pause(con_t *con, char **unused)
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_skip(con_t *con, char **unused)
 {
 	int			ret;
@@ -478,7 +501,7 @@ hgd_cmd_skip(con_t *con, char **unused)
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_user_mkadmin(con_t *con, char **args)
 {
 	int		ret = HGD_FAIL;
@@ -501,7 +524,7 @@ hgd_cmd_user_mkadmin(con_t *con, char **args)
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_user_noadmin(con_t *con, char **args)
 {
 	int		ret = HGD_FAIL;
@@ -537,7 +560,7 @@ hgd_cmd_user_noadmin(con_t *con, char **args)
  * after 'ok...'
  * client then sends 'size' bytes of the media to queue
  */
-int
+static int
 hgd_cmd_queue(con_t *con, char **args)
 {
 	char			*filename_p = args[0];
@@ -596,7 +619,7 @@ clean:
 	return (ret);
 }
 
-int
+static int
 binary_finished_cb(con_t *con)
 {
 	int ret = HGD_OK;
@@ -630,7 +653,7 @@ clean:
  *
  * args: username, pass
  */
-int
+static int
 hgd_cmd_user(con_t *con, char **args)
 {
 	struct hgd_user		*info;
@@ -654,7 +677,7 @@ hgd_cmd_user(con_t *con, char **args)
 	return (HGD_OK);
 }
 
-int
+static int
 hgd_cmd_vote_off(con_t *con, char **args)
 {
 	char				*ipc_path = NULL;
@@ -764,14 +787,14 @@ clean:
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_vote_off_noarg(con_t *con, char **unused)
 {
 	(void) unused;
 	return (hgd_cmd_vote_off(con, NULL));
 }
 
-int
+static int
 hgd_cmd_user_add(con_t *con, char **params)
 {
 	int			ret = HGD_FAIL;
@@ -794,7 +817,7 @@ hgd_cmd_user_add(con_t *con, char **params)
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_user_del(con_t *con, char **params)
 {
 	int			ret = HGD_FAIL;
@@ -816,7 +839,7 @@ hgd_cmd_user_del(con_t *con, char **params)
 	return (ret);
 }
 
-int
+static int
 hgd_cmd_encrypt_questionmark(con_t *con, char **unused)
 {
 	(void) unused;
@@ -829,11 +852,10 @@ hgd_cmd_encrypt_questionmark(con_t *con, char **unused)
 	return (HGD_OK);
 }
 
-int
+static int
 hgd_cmd_encrypt(con_t *con, char **unused)
 {
-	int			 ssl_err = 0, ret = -1;
-	SSL			*ssl;
+	int			 ret = -1;
 	(void) unused;
 
 	if (con->is_ssl) {
@@ -849,24 +871,29 @@ hgd_cmd_encrypt(con_t *con, char **unused)
 	}
 
 	DPRINTF(HGD_D_DEBUG, "New SSL for session");
-	ssl = SSL_new(settings.ssl.ctx);
-	if (ssl == NULL) {
+	con->ssl = SSL_new(settings.ssl.ctx);
+	if (con->ssl == NULL) {
 		PRINT_SSL_ERR(HGD_D_ERROR, "SSL_new");
 		goto clean;
 	}
-	con->is_ssl = 1;
-	bufferevent_openssl_filter_new(settings.eb, con->bev, ssl,
-	    BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+
+	bufferevent_disable(con->bev, EV_READ);
+	OUT ("ok");
+	//bufferevent_disable(con->bev, EV_WRITE);
+
+	DPRINTF(HGD_D_DEBUG, "Ready to encrypt sending ok...");
+
 
 	ret = HGD_OK; /* all is well */
 clean:
 
 	if (ret == HGD_FAIL) {
 		DPRINTF(HGD_D_INFO, "SSL connection failed");
+		con->is_ssl = 1;
+		/* TODO: this will not kick user*/
 		hgd_exit_nicely(); /* be paranoid and kick client */
 	} else {
 		DPRINTF(HGD_D_INFO, "SSL connection established");
-		OUT("ok");
 	}
 
 	return (ret);
@@ -1063,6 +1090,9 @@ int create_ss(int port) {
 
 }
 
+
+
+
 /**
  * Called whenever a user has sent some data to be processed.
  * Has two modes line and binary.
@@ -1071,6 +1101,8 @@ void read_callback(struct bufferevent *bev, void *ctx)
 {
 	con_t *con = (con_t*) ctx;
 	char * line;
+
+	DPRINTF(HGD_D_DEBUG, "READ_CB");
 
 	bufferevent_read_buffer(bev, con->in);
 	if (con->binary_mode == NULL) {
@@ -1092,7 +1124,8 @@ void read_callback(struct bufferevent *bev, void *ctx)
 				bytes_copied, con->binary_mode->bytes_left);
 
 			con->binary_mode->bytes_left -= bytes_copied;
-			write_ret = write(con->binary_mode->fd, data, bytes_copied);
+			write_ret = write(con->binary_mode->fd, data,
+			    bytes_copied);
 
 			if (write_ret < bytes_copied) {
 				/*
@@ -1110,7 +1143,8 @@ void read_callback(struct bufferevent *bev, void *ctx)
 				unlink(con->binary_mode->filename); /* don't much care if this fails */
 				/* TODO: goto clean; */
 			}
-		} while ( con->binary_mode->bytes_left > 0 && evbuffer_get_length(con->in) > 0 );
+		} while ( con->binary_mode->bytes_left > 0 &&
+		    evbuffer_get_length(con->in) > 0 );
 
 		if (con->binary_mode->bytes_left == 0) {
 			binary_finished_cb(con);
@@ -1123,6 +1157,17 @@ void read_callback(struct bufferevent *bev, void *ctx)
 	}
 
 	if (con->closing) {
+		DPRINTF(HGD_D_DEBUG, "");
+		//if (con->is_ssl) {
+		//	SSL *ctx = bufferevent_openssl_get_ssl(con->bev);
+
+			/* SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN tells SSL_shutdown to
+			 * act as if the SSL close handshake had already been completed.
+			 * It is a nasty hack, but if we don't do it, SSL_shutdown will block. */
+		//	SSL_set_shutdown(ctx, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
+		//	SSL_shutdown(ctx);
+		//}
+
 		OUT( "ok|Catch you later d00d!");
 		bufferevent_disable(bev, EV_READ);
 	}
@@ -1138,10 +1183,42 @@ void write_callback(struct bufferevent *bev, void *ctx)
 {
 	DPRINTF(HGD_D_DEBUG, "write callback");
 	con_t *con = (con_t*) ctx;
-	bufferevent_write_buffer(bev, con->out);
-	if (con->closing && evbuffer_get_length(bufferevent_get_output(bev)) == 0) {
-		DPRINTF(HGD_D_DEBUG, "all done, closing");
-		bufferevent_free(bev);
+	if (con->ssl != NULL) {
+		bufferevent_enable(con->bev, EV_READ | EV_WRITE | EV_SIGNAL);
+
+		DPRINTF(HGD_D_DEBUG, "There is no time for negotaions");
+		con->bev = bufferevent_openssl_filter_new(settings.eb, con->bev,
+		    con->ssl, BUFFEREVENT_SSL_ACCEPTING ,0);
+		DPRINTF(HGD_D_DEBUG, "FIRE EVENT PLS!");
+
+		bufferevent_enable(con->bev, EV_READ | EV_WRITE | EV_SIGNAL);
+		OUT("ok");
+		bufferevent_setcb(con->bev,read_callback, write_callback, cb,
+		    con);
+		bufferevent_write_buffer(con->bev, con->out);
+		con->ssl = NULL;
+		con->is_ssl = 1;
+	} else {
+
+		if (con->closing &&
+		    evbuffer_get_length(bufferevent_get_output(bev)) == 0) {
+
+			bufferevent_disable(bev, EV_READ|EV_WRITE);
+			SSL *ctx = NULL;
+			if (con->is_ssl)
+				ctx = bufferevent_openssl_get_ssl(bev);
+
+			if (ctx != NULL) {
+				DPRINTF(HGD_D_DEBUG,
+				    "IN ssl so need to shut that shit down");
+				SSL_shutdown(ctx);
+			}
+			bufferevent_free(bev);
+			DPRINTF(HGD_D_DEBUG, "all done, closing");
+
+			return;
+		}
+		bufferevent_write_buffer(bev, con->out);
 	}
 }
 
@@ -1186,8 +1263,10 @@ accept_cb_func(evutil_socket_t fd, short what, void *arg)
 	con->out = evbuffer_new();
 	con->in = evbuffer_new();
 
-	bev = bufferevent_socket_new(eb, client_sd, BEV_OPT_CLOSE_ON_FREE);
-	bufferevent_setcb(bev,read_callback, write_callback, cb, con);
+	bev = bufferevent_socket_new(eb, client_sd, 0);
+	bufferevent_setcb(bev,read_callback, write_callback, NULL, con);
+
+	con->bev = bev;
 
 	OUT( "ok|" HGD_RESP_O_GREET);
 
@@ -1202,8 +1281,7 @@ accept_cb_func(evutil_socket_t fd, short what, void *arg)
 
 }
 
-
-static char**
+void
 setup_libconfig()
 {
 	settings.libconfig.config_paths[0] = NULL;

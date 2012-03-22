@@ -55,9 +55,9 @@ int			 port = HGD_DFL_PORT;
 int			 sock_fd = -1;
 uint8_t			 max_playlist_items = 0;
 
-SSL			*ssl = NULL;
-SSL_METHOD		*method;
-SSL_CTX			*ctx;
+//SSL			*ssl = NULL;
+//SSL_METHOD		*method;
+//SSL_CTX			*ctx;
 uint8_t			 crypto_pref = HGD_CRYPTO_PREF_IF_POSS;
 uint8_t			 server_ssl_capable = 0;
 uint8_t			 authenticated = 0;

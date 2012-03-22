@@ -7,6 +7,7 @@ AC_LANG_C
 AC_PROG_MAKE_SET
 AC_HEADER_STDC
 
+#ALL_TARGETS="hgdc"
 ALL_TARGETS=""
 INSTALL_TARGETS="install-hgdc install-readme install-man-hgd-proto install-example-client"
 

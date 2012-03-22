@@ -84,7 +84,7 @@ hgd_exit_nicely()
 	if (host)
 		free(host);
 
-	if (sock_fd > 0) {
+	if (settings.sock_fd > 0) {
 		/* try to close connection */
 #ifndef __APPLE__
 		/*
@@ -99,10 +99,10 @@ hgd_exit_nicely()
 		 * Long story short:
 		 * On OSX the server will do the shutdown for us.
 		 */
-		if (shutdown(sock_fd, SHUT_RDWR) == -1)
+		if (shutdown(settings.sock_fd, SHUT_RDWR) == -1)
 			DPRINTF(HGD_D_WARN, "Couldn't shutdown socket");
 #endif
-		close(sock_fd);
+		close(settings.sock_fd);
 	}
 
 	HGD_CLOSE_SYSLOG();
@@ -360,9 +360,9 @@ hgd_req_vote_off(int n_args, char **args)
 	(void) args;
 	(void) n_args;
 
-	hgd_sock_send_line(sock_fd, ssl, "vo");
+	hgd_sock_send_line(settings.sock_fd, ssl, "vo");
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "Vote off failed");
 		free(resp);
@@ -387,7 +387,7 @@ hgd_req_playlist(int n_args, char **args)
 	 * so be it. We just won't show any vote info for the user.
 	 */
 	if (!authenticated)
-		hgd_client_login(sock_fd, ssl, user);
+		hgd_client_login(settings.sock_fd, ssl, user);
 
 	if (hgd_cli_get_playlist(&list) != HGD_OK)
 		return (HGD_FAIL);
@@ -453,9 +453,9 @@ hgd_req_skip(int n_args, char **args)
 	(void) args;
 	(void) n_args;
 
-	hgd_sock_send_line(sock_fd, ssl, "skip");
+	hgd_sock_send_line(settings.sock_fd, ssl, "skip");
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "Skip failed");
 		free(resp);
@@ -474,9 +474,9 @@ hgd_req_pause(int n_args, char **args)
 	(void) args;
 	(void) n_args;
 
-	hgd_sock_send_line(sock_fd, ssl, "pause");
+	hgd_sock_send_line(settings.sock_fd, ssl, "pause");
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "Pause failed");
 		free(resp);
@@ -498,11 +498,11 @@ hgd_req_user_add(int n_args, char **args)
 
 	xasprintf(&msg, "user-add|%s|%s", args[0], args[1]);
 
-	hgd_sock_send_line(sock_fd, ssl, msg);
+	hgd_sock_send_line(settings.sock_fd, ssl, msg);
 
 	free(msg);
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "Add user failed");
 		free(resp);
@@ -539,10 +539,10 @@ hgd_req_user_list(int n_args, char **args)
 	(void) n_args;
 
 	xasprintf(&msg, "user-list");
-	hgd_sock_send_line(sock_fd, ssl, msg);
+	hgd_sock_send_line(settings.sock_fd, ssl, msg);
 	free(msg);
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "list users failed");
 		free(resp);
@@ -563,7 +563,7 @@ hgd_req_user_list(int n_args, char **args)
 
 	for (i = 0; i < n_items; i++) {
 		DPRINTF(HGD_D_DEBUG, "getting user %d", i);
-		resp = hgd_sock_recv_line(sock_fd, ssl);
+		resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 
 		if ((p = strchr(resp, '|')) == NULL) {
 			DPRINTF(HGD_D_WARN, "could not find perms field");
@@ -618,11 +618,11 @@ hgd_req_user_mkadmin(int n_args, char **args)
 
 	xasprintf(&msg, "user-mkadmin|%s", args[0]);
 
-	hgd_sock_send_line(sock_fd, ssl, msg);
+	hgd_sock_send_line(settings.sock_fd, ssl, msg);
 
 	free(msg);
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "mkadmin failed");
 		free(resp);
@@ -644,11 +644,11 @@ hgd_req_user_noadmin(int n_args, char **args)
 
 	xasprintf(&msg, "user-noadmin|%s", args[0]);
 
-	hgd_sock_send_line(sock_fd, ssl, msg);
+	hgd_sock_send_line(settings.sock_fd, ssl, msg);
 
 	free(msg);
 
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL) {
 		DPRINTF(HGD_D_ERROR, "noadmin failed");
 		free(resp);
@@ -674,10 +674,10 @@ hgd_req_np(int n_args, char **args)
 	 * so be it. We just won't show any vote info for the user.
 	 */
 	if (!authenticated)
-		hgd_client_login(sock_fd, ssl, user);
+		hgd_client_login(settings.sock_fd, ssl, user);
 
-	hgd_sock_send_line(sock_fd, ssl, "np");
-	resp = hgd_sock_recv_line(sock_fd, ssl);
+	hgd_sock_send_line(settings.sock_fd, ssl, "np");
+	resp = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL)
 		return (HGD_FAIL);
 
@@ -730,8 +730,8 @@ hgd_req_id(int n_args, char **args)
 	(void) n_args;
 	(void) args;
 
-	hgd_sock_send_line(sock_fd, ssl, "id");
-	resp = next = hgd_sock_recv_line(sock_fd, ssl);
+	hgd_sock_send_line(settings.sock_fd, ssl, "id");
+	resp = next = hgd_sock_recv_line(settings.sock_fd, ssl);
 	if (hgd_check_svr_response(resp, 0) == HGD_FAIL)
 		goto fail;
 

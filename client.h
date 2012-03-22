@@ -57,16 +57,27 @@ struct hgd_resp_err {
 };
 
 
+struct client_settings {
+	char		*user;
+	char		*host;
+	char		*password;
+
+	int		 port;
+	int		 sock_fd;
+	uint8_t 	 max_playlist_items;
+
+};
+
+extern struct client_settings settings;
+
 extern struct hgd_resp_err hgd_resp_errs[];
 
-extern char		*user, *host, *password;
-extern int		 port, sock_fd;
 extern uint8_t		 max_playlist_items;
 
 extern SSL		*ssl;
 extern SSL_METHOD	*method;
 extern SSL_CTX		*ctx;
-extern uint8_t		 crypto_pref, server_ssl_capable, authenticated;
+extern uint8_t		 server_ssl_capable, authenticated;
 extern uint8_t		 hud_refresh_speed, colours_on;
 
 int			 hgd_client_edit_config();

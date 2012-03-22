@@ -87,9 +87,9 @@ mplayer.o: mplayer.c mplayer.h
 	${CC} mplayer.c ${SQL_CFLAGS} ${PY_CFLAGS} ${CPPFLAGS} ${CFLAGS} \
 		-c -o mplayer.o
 
-client.o: client.c client.h hgd.h
+client.o: client-event.c client.h hgd.h
 	@echo "\n--> Building: \"client.o\""
-	${CC} client.c ${CONFIG_CFLAGS} ${BSD_CFLAGS} ${SSL_CFLAGS} -c -o client.o
+	${CC} client-event.c ${CONFIG_CFLAGS} ${BSD_CFLAGS} ${SSL_CFLAGS} -c -o client.o
 
 hgd-playd: common.o db.o py.o hgd-playd.c hgd.h config.h crypto.o mplayer.o cfg.o
 	@echo "\n--> Building: \"hgd-playd\""

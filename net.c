@@ -58,14 +58,15 @@ hgd_setup_ssl_ctx(SSL_METHOD **method, SSL_CTX **ctx,
 
 	SSL_load_error_strings();
 
-	DPRINTF(HGD_D_DEBUG, "Setting up TLSv1_client_method");
 	if (server) {
+		DPRINTF(HGD_D_DEBUG, "Setting up TLSv1_server_method");
 		*method = (SSL_METHOD *) TLSv1_server_method();
 		if (*method == NULL) {
 			PRINT_SSL_ERR(HGD_D_ERROR, "TLSv1_server_method");
 			return (HGD_FAIL);
 		}
 	} else {
+		DPRINTF(HGD_D_DEBUG, "Setting up TLSv1_client_method");
 		*method = (SSL_METHOD *) TLSv1_client_method();
 		if (*method == NULL) {
 			PRINT_SSL_ERR(HGD_D_ERROR, "TLSv1_client_method");
@@ -84,7 +85,7 @@ hgd_setup_ssl_ctx(SSL_METHOD **method, SSL_CTX **ctx,
 
 
 		xasprintf(&keystore_path, "%s%s", home, "/.hgdc/certs");
-		/* xxx: create  certpath if it doesn't exist*/
+		/* xxx: create  cert_path if it doesn't exist*/
 #endif
 	}
 
@@ -118,6 +119,8 @@ hgd_setup_ssl_ctx(SSL_METHOD **method, SSL_CTX **ctx,
 		DPRINTF(HGD_D_WARN, "Can't load SSL cert: %s", cert_path);
 		PRINT_SSL_ERR(HGD_D_WARN, "SSL_CTX_use_certificate_file");
 		return (HGD_FAIL);
+	} else {
+		DPRINTF(HGD_D_DEBUG, "Loaded SSL certificate \"%s\"", cert_path);
 	}
 
 	/* set the private key from KeyFile */
@@ -127,6 +130,8 @@ hgd_setup_ssl_ctx(SSL_METHOD **method, SSL_CTX **ctx,
 		DPRINTF(HGD_D_WARN, "Can't load SSL key: %s", key_path);
 		PRINT_SSL_ERR(HGD_D_WARN, "SSL_CTX_use_PrivateKey_file");
 		return (HGD_FAIL);
+	} else {
+		DPRINTF(HGD_D_DEBUG, "Loaded SSL private key \"%s\"", key_path);
 	}
 
 	/* verify private key */
@@ -136,6 +141,8 @@ hgd_setup_ssl_ctx(SSL_METHOD **method, SSL_CTX **ctx,
 		PRINT_SSL_ERR(HGD_D_WARN, "SSL_CTX_check_private_key");
 		return (HGD_FAIL);
 	}
+
+
 
 done:
 	return (HGD_OK);
