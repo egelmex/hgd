@@ -1061,8 +1061,7 @@ int create_ss(int port)
 	DPRINTF(HGD_D_DEBUG, "Listening on port %d", port);
 
 	// Create server socket
-	if( (sd = socket(PF_INET, SOCK_STREAM, 0)) < 0 )
-	{
+	if( (sd = socket(PF_INET, SOCK_STREAM, 0)) < 0 ) {
 		perror("socket error");
 		return -1;
 	}
@@ -1073,24 +1072,21 @@ int create_ss(int port)
 	addr.sin_addr.s_addr = INADDR_ANY;
 
 	// Bind socket to address
-	if (bind(sd, (struct sockaddr*) &addr, sizeof(addr)) != 0)
-	{
+	if (bind(sd, (struct sockaddr*) &addr, sizeof(addr)) != 0) {
 		perror("bind error");
 	}
 
 	if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR,
 				&sockopt, sizeof(sockopt)) < 0) {
 		perror("SO_RESUSEADDR error");
-
-		//DPRINTF(HGD_D_WARN, "Can't set SO_REUSEADDR");
 	}
 
 	// Start listing on the socket
-	if (listen(sd, 2) < 0)
-	{
+	if (listen(sd, 2) < 0) {
 		perror("listen error");
 		return -1;
 	}
+
 	return sd;
 
 }
@@ -1526,8 +1522,9 @@ hup_h (int sig)
 int
 main(int argc, char **argv)
 {
-	struct event *ev1;
-	char *db_path;
+	struct event	*ev1;
+	char		*db_path;
+	int		 ss;
 
 	signal (SIGHUP, hup_h);
 
@@ -1560,13 +1557,17 @@ main(int argc, char **argv)
 	settings.eb = event_base_new();
 
 	setup_SSL();
-	ev1 = event_new(settings.eb, create_ss(settings.port),
-	    EV_TIMEOUT|EV_READ|EV_PERSIST, accept_cb_func,
-	    settings.eb);
+
+	ss = create_ss(settings.port);
+
+	ev1 = event_new(settings.eb, ss, EV_TIMEOUT|EV_READ|EV_PERSIST,
+	    accept_cb_func, settings.eb);
 
 	event_add(ev1, NULL);
 
 	event_base_dispatch(settings.eb);
+
+	close(ss);
 
 	if (hup) {
 		DPRINTF(HGD_D_INFO, "HUP now!");
