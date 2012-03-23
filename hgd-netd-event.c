@@ -1320,11 +1320,11 @@ hgd_read_config(char **config_locations)
 	hgd_cfg_statepath(cf, &settings.paths.state_path);
 	hgd_cfg_crypto(cf, "netd", &settings.ssl.crypto_pref);
 	hgd_cfg_netd_flood_limit(cf, &settings.flood_limit);
-	/*hgd_cf_netd_ssl_privkey(cf, &ssl_key_path); TODO:*/
+	hgd_cf_netd_ssl_privkey(cf, &settings.ssl.ssl_key_path);
 	hgd_cfg_netd_votesound(cf, &settings.req_votes);
 	hgd_cfg_netd_port(cf, &settings.port);
 	hgd_cfg_netd_max_filesize(cf, &settings.max_upload_size);
-	/*hgd_cfg_netd_sslcert(cf, &ssl_cert_path); TODO:*/
+	hgd_cfg_netd_sslcert(cf, &settings.ssl.ssl_cert_path);
 	hgd_cfg_debug(cf, "netd", &hgd_debug); /*TODO: put this is settings? */
 	hgd_cfg_netd_voteoff_sound(cf, &settings.vote_sound);
 
@@ -1435,10 +1435,10 @@ parse_options_2(int argc, char **argv)
 			    settings.flood_limit);
 			break;
 		case 'k':
-			free(ssl_key_path);
+			free(settings.ssl.ssl_key_path);
 			settings.ssl.ssl_key_path = optarg;
 			DPRINTF(HGD_D_DEBUG,
-			    "set ssl private key path to '%s'", ssl_key_path);
+			    "set ssl private key path to '%s'", settings.ssl.ssl_key_path);
 			break;
 		case 'n':
 			settings.req_votes = atoi(optarg);
@@ -1455,10 +1455,10 @@ parse_options_2(int argc, char **argv)
 			    (long long int) settings.max_upload_size);
 			break;
 		case 'S':
-			free(ssl_cert_path);
+			free(settings.ssl.ssl_cert_path);
 			settings.ssl.ssl_cert_path = optarg;
 			DPRINTF(HGD_D_DEBUG,
-			    "set ssl cert path to '%s'", ssl_cert_path);
+			    "set ssl cert path to '%s'", settings.ssl.ssl_cert_path);
 			break;
 		case 'v':
 			hgd_print_version();
@@ -1484,16 +1484,11 @@ parse_options_2(int argc, char **argv)
 int
 setup_SSL()
 {
-	char *ssl_cert_path = NULL, *ssl_key_path =  NULL;
-
-	ssl_key_path = xstrdup(HGD_DFL_KEY_FILE);
-	ssl_cert_path = xstrdup(HGD_DFL_CERT_FILE);
-	/* TODO: set paths */
 	/* unless the user actively disables SSL, we try to be capable */
 	if (settings.ssl.crypto_pref != never) {
 		if (hgd_setup_ssl_ctx(&(settings.ssl.method),
-		    &(settings.ssl.ctx), 1,
-		    ssl_cert_path, ssl_key_path) == 0) {
+		    &(settings.ssl.ctx), 1, settings.ssl.ssl_cert_path,
+		    settings.ssl.ssl_key_path) == 0) {
 			DPRINTF(HGD_D_INFO, "Server is SSL capable");
 			settings.ssl.ssl_capable = 1;
 		} else {
@@ -1512,7 +1507,7 @@ void
 sig_h (int sig)
 {
 	event_base_loopbreak(settings.eb);
-	if (SIGHUP) hup = 1;
+	if (sig == SIGHUP) hup = 1;
 }
 
 /**
@@ -1527,10 +1522,12 @@ main(int argc, char **argv)
 
 	signal (SIGHUP, sig_h);
 	signal (SIGINT, sig_h);
-
 	HGD_INIT_SYSLOG_DAEMON();
 
 	hgd_debug = 4;
+
+	settings.ssl.ssl_key_path = xstrdup(HGD_DFL_KEY_FILE);
+	settings.ssl.ssl_cert_path = xstrdup(HGD_DFL_CERT_FILE);
 
 	settings.paths.state_path = xstrdup(HGD_DFL_DIR);
 	xasprintf(&db_path, "%s/%s", settings.paths.state_path, HGD_DB_NAME);
